@@ -1,0 +1,388 @@
+/* ألوان ومسافات مشتركة حتى يبقى شكل الواجهة متناسقًا. */
+:root {
+  color-scheme: light;
+  --color-page: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-text: #202b3c;
+  --color-muted: #68768a;
+  --color-subtle: #8b97a8;
+  --color-border: #e2e8f0;
+  --color-primary: #355fc7;
+  --color-primary-hover: #294fae;
+  --color-danger: #a43f4b;
+  --color-danger-soft: #fff1f2;
+  --color-complete: #496654;
+  --color-complete-accent: #39835a;
+  --color-complete-surface: #f0f7f2;
+  --color-complete-border: #bfd8c6;
+  --radius-card: 18px;
+  --radius-control: 10px;
+  --shadow-card: 0 18px 50px rgb(38 55 82 / 8%), 0 2px 8px rgb(38 55 82 / 4%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* إعدادات أساسية لتوحيد قياس العناصر والخطوط. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--color-page);
+  color: var(--color-text);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* يوسّط التطبيق ويحدّ عرضه على الشاشات الكبيرة. */
+.app-shell {
+  width: min(100% - 32px, 680px);
+  margin: 0 auto;
+  padding: clamp(36px, 9vh, 88px) 0 30px;
+}
+
+.todo-card {
+  overflow: hidden;
+  padding: clamp(24px, 5vw, 42px);
+  background: var(--color-surface);
+  border: 1px solid rgb(226 232 240 / 85%);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.app-header {
+  margin-bottom: 26px;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(1.8rem, 6vw, 2.35rem);
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+}
+
+/* تنسيق حقل الإضافة ورسالة التحقق وحالة الزر. */
+.input-label {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.form-row input {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 14px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--radius-control);
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.form-row input::placeholder {
+  color: var(--color-subtle);
+}
+
+.form-row input:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgb(53 95 199 / 16%);
+}
+
+.form-row input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.form-row input[aria-invalid="true"]:focus-visible {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 3px rgb(164 63 75 / 15%);
+}
+
+.form-feedback {
+  min-height: 1.2rem;
+  margin: 7px 0 0;
+  color: var(--color-danger);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.add-button {
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 0 20px;
+  color: #fff;
+  font-weight: 650;
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.add-button:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.add-button:active {
+  transform: translateY(1px);
+}
+
+/* فصل عنوان القائمة عن النموذج ومحاذاة الملخص بجانبه. */
+.list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 12px;
+  padding-top: 17px;
+  border-top: 1px solid var(--color-border);
+}
+
+.list-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.task-summary {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  text-align: right;
+}
+
+/* شكل عناصر المهام وتوزيع النص وأزرار التفاعل. */
+.task-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 12px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.task-item:hover {
+  background: #fbfcfe;
+  border-color: #d2dbe8;
+}
+
+/* تخصيص مظهر مربع الاختيار مع الإبقاء على input أصلي قابل للوحة المفاتيح. */
+.task-checkbox {
+  flex: 0 0 auto;
+  appearance: none;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  padding: 0;
+  background: #fff;
+  border: 1.5px solid #aebaca;
+  border-radius: 6px;
+  cursor: pointer;
+  place-content: center;
+  transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.task-checkbox:hover {
+  border-color: var(--color-primary);
+}
+
+.task-checkbox::after {
+  width: 5px;
+  height: 9px;
+  content: "";
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  opacity: 0;
+  transform: translateY(-1px) rotate(45deg) scale(0.8);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.task-checkbox:checked {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.task-checkbox:checked::after {
+  opacity: 1;
+  transform: translateY(-1px) rotate(45deg) scale(1);
+}
+
+.task-checkbox:focus-visible {
+  outline: 3px solid rgb(53 95 199 / 30%);
+  outline-offset: 2px;
+}
+
+.task-label {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.task-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* حالة الإكمال تجمع بين لون الصف وعلامة الصح وشطب رفيع للنص. */
+.task-item.is-complete {
+  background: var(--color-complete-surface);
+  border-color: var(--color-complete-border);
+  box-shadow: inset 3px 0 0 var(--color-complete-accent);
+}
+
+.task-item.is-complete .task-text {
+  color: var(--color-complete);
+  text-decoration-line: line-through;
+  text-decoration-color: #6e9b7c;
+  text-decoration-thickness: 1px;
+  text-decoration-skip-ink: auto;
+}
+
+.task-item.is-complete .task-checkbox:checked {
+  background: var(--color-complete-accent);
+  border-color: var(--color-complete-accent);
+}
+
+/* زر حذف واضح، مع إبراز أحمر عند المرور أو التركيز. */
+.delete-button {
+  flex: 0 0 auto;
+  min-width: 40px;
+  min-height: 40px;
+  margin: -7px -5px -7px 0;
+  padding: 0 9px;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.delete-button:hover {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-color: #ffe0e3;
+}
+
+.delete-button:active {
+  background: #ffe7e9;
+}
+
+/* رسالة بسيطة عندما تكون القائمة فارغة. */
+.empty-state {
+  padding: 18px 16px;
+  color: var(--color-muted);
+  background: #fbfcfe;
+  text-align: center;
+  border: 1px dashed #d8e0eb;
+  border-radius: 12px;
+}
+
+.empty-state p {
+  margin-bottom: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+/* مؤشر مرئي للتنقل بلوحة المفاتيح. */
+:where(button, input):focus-visible {
+  outline: 3px solid rgb(53 95 199 / 38%);
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  /* ترتيب النموذج عموديًا وتقليل الهوامش على الهاتف. */
+  .app-shell {
+    width: min(100% - 24px, 680px);
+    padding-top: 26px;
+  }
+
+  .todo-card {
+    padding: 24px 18px;
+    border-radius: 15px;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .add-button {
+    width: 100%;
+  }
+
+  .task-item {
+    gap: 10px;
+    padding: 12px 10px;
+  }
+}
+
+@media (forced-colors: active) {
+  /* إعادة شكل مربع الاختيار الافتراضي في أوضاع التباين العالي. */
+  .task-checkbox {
+    appearance: auto;
+    display: initial;
+    width: 20px;
+    height: 20px;
+    padding: initial;
+  }
+
+  .task-checkbox::after {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* احترام إعداد المستخدم لتقليل الحركة. */
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

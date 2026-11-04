@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f7fa">
+    <title>My To-Do List</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <!-- الحاوية الرئيسية تحدد محتوى التطبيق وعنوانه الدلالي. -->
+    <main class="app-shell">
+      <section class="todo-card" aria-labelledby="page-title">
+        <header class="app-header">
+          <h1 id="page-title">My To-Do List</h1>
+        </header>
+
+        <!-- النموذج يستقبل المهمة ويتيح إضافتها بالزر أو بزر Enter. -->
+        <form class="task-form" id="task-form">
+          <label class="input-label" for="task-input">New task</label>
+          <div class="form-row">
+            <input
+              id="task-input"
+              name="task"
+              type="text"
+              placeholder="Add a task"
+              autocomplete="off"
+              aria-describedby="input-feedback"
+            >
+            <button class="add-button" type="submit">Add Task</button>
+          </div>
+          <p class="form-feedback" id="input-feedback" aria-live="polite" aria-atomic="true"></p>
+        </form>
+
+        <!-- العنوان والملخص يتحدثان مع تغيّر عدد المهام وحالتها. -->
+        <div class="list-heading">
+          <h2>Tasks</h2>
+          <p class="task-summary" id="task-summary" role="status" aria-live="polite"></p>
+        </div>
+
+        <!-- JavaScript يضيف عناصر القائمة هنا ويظهر الحالة الفارغة عند الحاجة. -->
+        <section class="task-section" aria-label="Your tasks">
+          <ul class="task-list" id="task-list" aria-describedby="task-summary"></ul>
+          <div class="empty-state" id="empty-state">
+            <p>No tasks yet. Add one to get started.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
