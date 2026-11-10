@@ -1,0 +1,15 @@
+# Local environment values; use .env.example as a template.
+.env
+.env.*
+!.env.example
+
+# Local Node.js browser-test dependencies and generated Playwright output.
+/node_modules/
+/playwright-report/
+/test-results/
+
+# Go build and test artifacts.
+/todo-api.exe
+/todo-api
+*.test
+coverage.out

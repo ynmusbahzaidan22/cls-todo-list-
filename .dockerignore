@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+playwright-report
+test-results
+coverage.out
+*.test
+todo-api
+todo-api.exe
+*.dump
+*.backup

@@ -1,0 +1,28 @@
+{
+  "name": "todo-list-quality-checks",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "test:html": "html-validate index.html",
+    "test:phase8": "playwright test e2e/phase8-undo.spec.js",
+    "test:phase9": "playwright test e2e/phase9-bulk.spec.js",
+    "test:phase10": "playwright test e2e/phase10-templates.spec.js",
+    "test:phase13": "playwright test e2e/phase13-deleted-tasks.spec.js",
+    "test:phase14": "playwright test e2e/phase14-task-search.spec.js",
+    "test:phase15": "playwright test e2e/phase15-priority.spec.js",
+    "test:phase16": "playwright test e2e/phase16-due-dates.spec.js",
+    "test:phase17-18": "playwright test e2e/phase17-18-lifecycle.spec.js",
+    "test:e2e": "playwright test",
+    "test:phase8:headed": "playwright test --headed",
+    "test:phase8:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.64.1",
+    "html-validate": "^11.18.0",
+    "pg": "^8.23.1"
+  }
+}
