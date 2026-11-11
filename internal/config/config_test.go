@@ -107,6 +107,78 @@ func TestLoadValidProductionConfiguration(t *testing.T) {
 	}
 }
 
+func TestPlaywrightTestModeRequiresExactIsolatedDatabase(t *testing.T) {
+	valid := map[string]string{
+		"APP_ENV":             "development",
+		"DATABASE_URL":        "postgres://test:secret@127.0.0.1:25432/todo_test",
+		"HTTP_ADDR":           "127.0.0.1:18080",
+		"TRUSTED_PROXY_CIDRS": "127.0.0.1/32",
+		playwrightTestModeEnv: "1",
+	}
+	cfg, err := load(mapLookup(valid))
+	if err != nil || !cfg.PlaywrightTestMode {
+		t.Fatalf("isolated Playwright test mode config = enabled %v, err %v", cfg.PlaywrightTestMode, err)
+	}
+
+	for name, databaseURL := range map[string]string{
+		"development database": "postgres://test:secret@127.0.0.1:15432/todo_dev",
+		"wrong database":       "postgres://test:secret@127.0.0.1:25432/todo_dev",
+		"remote host":          "postgres://test:secret@db.example.test:25432/todo_test",
+		"alternate loopback":   "postgres://test:secret@localhost:25432/todo_test",
+		"wrong port":           "postgres://test:secret@127.0.0.1:25433/todo_test",
+		"target query":         "postgres://test:secret@127.0.0.1:25432/todo_test?host=localhost",
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := cloneConfigValues(valid)
+			values["DATABASE_URL"] = databaseURL
+			if _, err := load(mapLookup(values)); err == nil {
+				t.Fatal("unsafe E2E test database target was accepted")
+			}
+		})
+	}
+}
+
+func TestPlaywrightTestModeCannotDisableProductionMaintenance(t *testing.T) {
+	values := map[string]string{
+		"APP_ENV":                 "production",
+		"HTTP_ADDR":               "0.0.0.0:8080",
+		"DATABASE_URL":            "postgres://test:secret@127.0.0.1:25432/todo_test?sslmode=verify-full",
+		"DATABASE_RUNTIME_ROLE":   "todo_test_runtime",
+		"TRUSTED_ORIGIN":          "https://todo.example.test",
+		"SESSION_COOKIE_SECURE":   "true",
+		"TRUSTED_PROXY_CIDRS":     "127.0.0.1/32",
+		"TASK_CURSOR_SIGNING_KEY": strings.Repeat("ab", 32),
+		playwrightTestModeEnv:     "1",
+	}
+	if _, err := load(mapLookup(values)); err == nil {
+		t.Fatal("production configuration accepted Playwright maintenance override")
+	}
+
+	values["APP_ENV"] = "development"
+	values[playwrightTestModeEnv] = "true"
+	if _, err := load(mapLookup(values)); err == nil {
+		t.Fatal("non-canonical Playwright mode value was accepted")
+	}
+	values[playwrightTestModeEnv] = "1"
+	values["TRUSTED_PROXY_CIDRS"] = "127.0.0.0/8"
+	if _, err := load(mapLookup(values)); err == nil {
+		t.Fatal("broad proxy trust was accepted in Playwright test mode")
+	}
+	values["TRUSTED_PROXY_CIDRS"] = "127.0.0.1/32"
+	values["HTTP_ADDR"] = "localhost:18080"
+	if _, err := load(mapLookup(values)); err == nil {
+		t.Fatal("non-literal API bind host was accepted in Playwright test mode")
+	}
+}
+
+func cloneConfigValues(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func mapLookup(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
 		value, ok := values[key]

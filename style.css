@@ -2493,6 +2493,9 @@ body.workspace-page { overflow-x: clip; }
 }
 
 .task-options-fields #due-date-help { margin: 0; }
+.timezone-preference { margin: 0 0 1rem; }
+.timezone-preference .form-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.timezone-preference .form-actions .secondary-button { min-height: 2.75rem; }
 
 @media (max-width: 600px) {
   .task-option-metadata { grid-template-columns: minmax(0, 1fr); gap: 14px; }
@@ -2512,3 +2515,20 @@ body.workspace-page { overflow-x: clip; }
   .task-filter-toggle { grid-column: 1; grid-row: 2; justify-self: start; }
   .task-filter-panel { grid-template-columns: minmax(0, 1fr); padding: 14px; }
 }
+.admin-account-panel {
+  margin-bottom: 1.5rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid var(--line, #d8dfe7);
+  border-radius: 1rem;
+  background: var(--surface, #fff);
+}
+
+.admin-account-panel > h2 { margin-top: 0; }
+.admin-account-list { display: grid; gap: .75rem; }
+.admin-account-row { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; padding: .9rem; border: 1px solid var(--line, #d8dfe7); border-radius: .75rem; }
+.admin-account-row > div { flex: 1 1 14rem; min-width: 0; }
+.admin-account-row h3, .admin-account-row p { margin: .15rem 0; overflow-wrap: anywhere; }
+.admin-account-row label { display: grid; gap: .25rem; }
+.admin-account-row select { min-height: 2.5rem; }
+.admin-protection-note { flex-basis: 100%; color: var(--muted, #536174); }
+.admin-load-more { justify-self: start; }

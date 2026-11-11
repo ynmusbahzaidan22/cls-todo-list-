@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -37,7 +38,7 @@ func NewManager(repository Repository) (*Manager, error) {
 	}, nil
 }
 
-func (m *Manager) Register(ctx context.Context, rawEmail, password, remoteIP string) (User, error) {
+func (m *Manager) Register(ctx context.Context, rawName, rawEmail, password, remoteIP string) (User, error) {
 	allowed, err := m.repository.AllowRateLimit(ctx, "register:ip:"+remoteIP, 50, registrationWindow)
 	if err != nil {
 		return User{}, fmt.Errorf("check registration rate limit: %w", ErrStorage)
@@ -45,8 +46,9 @@ func (m *Manager) Register(ctx context.Context, rawEmail, password, remoteIP str
 	if !allowed {
 		return User{}, ErrRateLimited
 	}
+	name := strings.TrimSpace(rawName)
 	email, err := normalizeEmail(rawEmail)
-	if err != nil || validatePassword(password) != nil {
+	if err != nil || validateName(name) != nil || validatePassword(password) != nil {
 		return User{}, ErrInvalidInput
 	}
 	var encoded string
@@ -58,7 +60,7 @@ func (m *Manager) Register(ctx context.Context, rawEmail, password, remoteIP str
 	if err != nil {
 		return User{}, err
 	}
-	user, err := m.repository.CreateAccount(ctx, email, encoded)
+	user, err := m.repository.CreateAccount(ctx, name, email, encoded)
 	if err != nil {
 		if errors.Is(err, ErrEmailTaken) {
 			return User{}, ErrEmailTaken
@@ -66,6 +68,14 @@ func (m *Manager) Register(ctx context.Context, rawEmail, password, remoteIP str
 		return User{}, fmt.Errorf("create account: %w", ErrStorage)
 	}
 	return user, nil
+}
+
+func validateName(name string) error {
+	length := utf8.RuneCountInString(name)
+	if length < 1 || length > 100 {
+		return ErrInvalidInput
+	}
+	return nil
 }
 
 func (m *Manager) Login(ctx context.Context, rawEmail, password, remoteIP string) (User, string, time.Time, error) {

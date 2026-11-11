@@ -348,6 +348,9 @@ func (h *TaskHandlers) activity(w http.ResponseWriter, r *http.Request) {
 		writeTaskError(w, err)
 		return
 	}
+	for i := range page.Items {
+		page.Items[i].CreatedAt = page.Items[i].CreatedAt.UTC()
+	}
 	writeJSONStatus(w, http.StatusOK, page)
 }
 
@@ -379,6 +382,7 @@ func (h *TaskHandlers) undoActivity(w http.ResponseWriter, r *http.Request) {
 		writeTaskError(w, err)
 		return
 	}
+	activity.CreatedAt = activity.CreatedAt.UTC()
 	writeJSONStatus(w, http.StatusOK, undoTaskResponse{Task: toTaskResponse(updated), Activity: activity})
 }
 
@@ -507,11 +511,20 @@ func decodeTaskJSON(w http.ResponseWriter, r *http.Request, destination any) boo
 }
 
 func toTaskResponse(item task.Task) taskResponse {
+	var completedAt, deletedAt *time.Time
+	if item.CompletedAt != nil {
+		value := item.CompletedAt.UTC()
+		completedAt = &value
+	}
+	if item.DeletedAt != nil {
+		value := item.DeletedAt.UTC()
+		deletedAt = &value
+	}
 	return taskResponse{
 		ID: item.ID, Title: item.Title, Description: item.Description, Status: item.Status, Priority: item.Priority,
 		DueDate: item.DueDate, IsOverdue: item.IsOverdue,
-		CompletedAt: item.CompletedAt, Version: item.Version, CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt, DeletedAt: item.DeletedAt,
+		CompletedAt: completedAt, Version: item.Version, CreatedAt: item.CreatedAt.UTC(),
+		UpdatedAt: item.UpdatedAt.UTC(), DeletedAt: deletedAt,
 	}
 }
 

@@ -4,11 +4,96 @@ This guide covers local verification and production-oriented configuration. It d
 
 ## Local roles and secrets
 
-The local Compose account `POSTGRES_USER` is the migration/administrative account. Keep it out of the API process. Run migrations with Tern using that administrative account, then provision the application role with `ops/provision_runtime_role.sql`. The script defaults to `todo_runtime` and accepts the same psql `runtime_role` variable for a custom name. It prompts for a password through hidden input only when the role has no password; rerunning it does not rotate an existing credential. `ops/grant_runtime_privileges.sql` accepts the same role variable and reapplies grants after restoring or adding migrations. Run both as a PostgreSQL administrator while connected to the intended application database.
+The local Compose account `POSTGRES_USER` is the migration/administrative account. Keep it out of the API process. Development migrations must use `ops/Invoke-DevelopmentMigrations.ps1`; do not invoke Tern directly for `todo_dev`. The wrapper loads `.env` silently, checks the explicit development target against `DATABASE_URL` and `tern.conf`, verifies the running PostgreSQL container/volume and database identity, checks migration inventory/version, and refuses migration while any other database session exists. Each migrate invocation advances exactly one explicitly expected version and requires `-AuthorizeDevelopmentMigration`. Test migrations must continue to use their separate `ops/Invoke-TestMigrations.ps1` wrapper and `tern.test.conf`.
 
-The application role must not own the database, `app` schema, or application tables. It has no schema-create or database-create privilege and cannot truncate application tables. It can insert users, manage sessions, read and mutate owned tasks, read and append activity events but never update or delete existing activity, manage templates and items, and maintain bounded rate-limit rows. Startup verification rejects effective UPDATE, DELETE, or TRUNCATE privileges on `app.task_activity`. Do not use the runtime role for Tern.
+After schema migration, provision the application role with `ops/provision_runtime_role.sql`. The script defaults to `todo_runtime` and accepts the same psql `runtime_role` variable for a custom name. It prompts for a password through hidden input only when the role has no password; rerunning it does not rotate an existing credential. `ops/grant_runtime_privileges.sql` accepts the same role variable and reapplies grants after restoring or adding migrations. Run both as a PostgreSQL administrator while connected to the intended application database.
 
-Keep `POSTGRES_PASSWORD`, the chosen `todo_runtime` password, and URLs containing either password in the ignored `.env` file or a deployment secret manager. `.env.example` uses placeholders only. For local development, store the admin connection in `TEST_DATABASE_URL` and use the runtime connection in `DATABASE_URL`. Never paste secret-bearing URLs into logs, tickets, or shell history.
+The application role must not own the database, any non-system schema, application relations, application functions, or application types. It must be `LOGIN`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOINHERIT`, `NOREPLICATION`, and `NOBYPASSRLS`; it must have no role memberships, database temporary-table/create rights, schema create rights, application-table trigger rights, or grant options. It requires database `CONNECT` and `app` schema `USAGE`. Effective database `CREATE`/`TEMPORARY` and schema `CREATE` privileges are prohibited, including access inherited through `PUBLIC`; provisioning revokes database `CREATE`/`TEMPORARY` from `PUBLIC` in the target database and removes `CREATE` on `public` schema. These are database-scoped changes, so review the target before running the scripts.
+
+The table-level runtime allowlist is exact: `users` = `SELECT`, `INSERT`; `sessions` = `SELECT`, `INSERT`, `UPDATE`, `DELETE`; `tasks` = `SELECT`, `INSERT`, `UPDATE`; `task_activity` = `SELECT`, `INSERT`; `task_templates`, `task_template_items`, and `auth_rate_limits` = `SELECT`, `INSERT`, `UPDATE`, `DELETE`; `task_template_applications` and `task_template_application_items` = `SELECT`, `INSERT`. For `users`, the only column-level update is `UPDATE(time_zone)`; all other columns and all other column-level privileges must match the table-level allowlist. `TRUNCATE`, `REFERENCES`, `TRIGGER`, and `MAINTAIN` are prohibited on every app table. The role receives no privileges on app sequences or functions, and may not own application relations, functions, or types.
+
+The role scripts remove existing `PUBLIC` and runtime-role table, column, sequence, and function privileges in schema `app` before applying the table allowlist; they also clear role privileges in `app` and regrant only schema `USAGE`. The verifier uses PostgreSQL effective privilege functions (therefore including `PUBLIC` and inherited access), inspects role memberships and ownership, and rejects unexpected PUBLIC ACLs, default ACL entries for PUBLIC/the runtime role, and grant options. It fails closed for unknown or missing app tables. The repository currently has no application role intended to rely on `PUBLIC` access to app objects. Trigger functions remain callable by their installed triggers; the runtime role does not need direct function `EXECUTE` because it neither creates nor alters triggers. Do not use the runtime role for Tern.
+
+The template repository only reads and inserts tracking rows; no application query directly updates or deletes them. Deleting a template remains supported: PostgreSQL's internal foreign-key cascade executes its child-table operation under the referenced table's constraint enforcement, so the runtime role does not need direct `DELETE` on tracking tables. The runtime role can read and append activity events but cannot update, delete, or truncate them. Existing or default ACLs outside what the scripts explicitly normalize can cause startup verification to fail; investigate and correct those ACLs as the owning administrator rather than weakening the verifier.
+
+Keep `POSTGRES_PASSWORD`, the chosen `todo_runtime` password, and URLs containing either password in the ignored `.env` file or a deployment secret manager. `.env.example` uses placeholders only. For local development, `DATABASE_URL` points to the runtime role in `todo_dev`. PostgreSQL integration tests use a separate disposable Compose project and PostgreSQL instance; `TEST_DATABASE_URL` must target exactly database `todo_test` on loopback port `25432`, and must never point to `todo_dev` or contain user data. Never paste secret-bearing URLs into logs, tickets, or shell history.
+
+## Guarded development migration: `todo_dev`
+
+The only supported development migration target is the PostgreSQL container `todo-list-postgres-1`, database `todo_dev`, reached through `127.0.0.1:15432` and volume `todo-list_postgres-data`. The wrapper rejects `todo_test`, other databases, remote hosts, unexpected ports, malformed URLs, Tern configuration drift, non-contiguous migration files, mismatched expected versions, and any migration request without explicit authorization. It also requires the container to be running and healthy and confirms the SQL session's database identity and PostgreSQL major version. It does not create backups or automatically roll back a failed migration.
+
+Read-only status discovers the current version while requiring the repository maximum:
+
+```powershell
+ .\ops\Invoke-DevelopmentMigrations.ps1 -Action status -ExpectedTargetVersion 15
+```
+
+On 2026-11-11, `todo_dev` advanced from 13/14 to 14/14 after a new custom-format backup was created, restored into a unique temporary database, and compared against the source. All nine pre-existing application tables had matching row counts and canonical row fingerprints; the schema fingerprints matched before and after restore. Migration 014 then created the Admin audit and final-Admin guard schema without changing any pre-existing table data. The current read-only status command is:
+
+```powershell
+ .\ops\Invoke-DevelopmentMigrations.ps1 -Action status -ExpectedCurrentVersion 14 -ExpectedTargetVersion 15
+```
+
+The wrapper refuses to migrate if any other `todo_dev` session is connected and repeats that check immediately before invoking Tern. This narrows, but cannot eliminate, the race where another local client connects between the final check and Tern's connection. Keep writers stopped throughout the migration window. If any identity, version, health, backup, restore, or comparison check fails, do not migrate. If Tern fails, preserve the database and backup, record the exit code, and investigate; never recreate the database or run an automatic rollback. The development wrapper is deliberately distinct from the test wrapper.
+
+## Isolated PostgreSQL integration-test instance
+
+The development service in `compose.yaml` uses project `todo-list`, host port `15432`, and volume `todo-list_postgres-data`. Keep that service and volume separate. The test service in `compose.test.yaml` uses project `todo-list-test`, database `todo_test`, host-only binding `127.0.0.1:25432`, a dedicated project-scoped network, and dedicated volume `todo-list-test_postgres-test-data`. The test network is not marked internal, so the test container may have outbound network access. It has no shared database volume or network with development. The test database's `todo_test_admin` is privileged only inside this disposable test server because runtime-role integration tests create cluster roles; never use development or production administrator credentials there.
+
+Create ignored `.env.test` from the test-only settings in `.env.example`, replacing the admin and runtime password placeholders with distinct local secrets. Do not copy credentials from `.env`. Set `TEST_POSTGRES_DB` to exactly `todo_test`; ensure both URLs use a supported loopback host, port `25432`, and database `todo_test`. Load `.env.test` into the PowerShell process without printing it, verify required settings, validate `TEST_DATABASE_URL` with the shared guard, verify `RUNTIME_DATABASE_URL` uses the same isolated endpoint, and validate Compose before starting anything:
+
+```powershell
+Get-Content .env.test | ForEach-Object {
+  if ($_ -match '^\s*([^#=\s]+)\s*=\s*(.*?)\s*$') {
+    [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+  }
+}
+foreach ($name in @('TEST_POSTGRES_DB', 'TEST_POSTGRES_USER', 'TEST_POSTGRES_PASSWORD', 'TEST_DATABASE_URL', 'RUNTIME_DATABASE_URL')) {
+  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) { throw "Required test setting is missing: $name" }
+}
+if ($env:TEST_POSTGRES_DB -cne 'todo_test') { throw 'TEST_POSTGRES_DB must be todo_test.' }
+node --input-type=module -e "import { validateTestDatabaseConfiguration } from './e2e/test-database.js'; validateTestDatabaseConfiguration(); console.log('Test database URL configuration is valid.')"
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml config --quiet
+```
+
+Only after configuration validation succeeds, start the test PostgreSQL service and verify readiness and its dedicated volume:
+
+```powershell
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml up -d postgres-test
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml ps
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml exec -T postgres-test pg_isready -U $env:TEST_POSTGRES_USER -d todo_test
+docker volume inspect todo-list-test_postgres-test-data
+```
+
+The migration directory contains thirteen migrations, applied by Tern in numeric order from 001 through 013. Migration 011 adds user names and roles; migration 012 adds uniqueness for `(template_id, position)` in `app.task_template_items`, after checking for duplicates and aborting without changing rows if any are found; migration 013 makes `users.time_zone` nullable, using NULL for the device-time-zone default while preserving saved IANA overrides. Tern's down sections vary: 002, 003, and 005 have none; 004, 008, 009, and 010 guard rollback against relevant data (010 also needs duplicate-free positions when restoring the former primary key); 011 is intentionally forward-only; 013 refuses rollback while any null time-zone preferences exist; and other down sections remove their migration's objects, with 006 dropping its rate-limit rows. File inventory is not evidence that a database has applied every migration; inspect each target's Tern status before operations. Review the exact down SQL and its data conditions before any rollback.
+
+Apply the test migrations before provisioning the runtime role, because the privilege scripts grant access to objects created by the migrations. The migration helper validates `TEST_DATABASE_URL`, derives Tern's process-only `PG*` variables from it, and uses only `tern.test.conf`:
+
+```powershell
+.\ops\Invoke-TestMigrations.ps1 -Action status
+.\ops\Invoke-TestMigrations.ps1 -Action migrate
+.\ops\Invoke-TestMigrations.ps1 -Action status
+```
+
+After migrations succeed, provision the restricted runtime role using the existing idempotent scripts and supported custom-role variable. The provision script prompts for an initial password with hidden input; use that same separate secret in `RUNTIME_DATABASE_URL`. The PostgreSQL administrator and its superuser privileges remain confined to this test container:
+
+```powershell
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml cp ops/provision_runtime_role.sql postgres-test:/tmp/provision_runtime_role.sql
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml exec -it postgres-test psql -v ON_ERROR_STOP=1 -v runtime_role=todo_test_runtime -U $env:TEST_POSTGRES_USER -d todo_test -f /tmp/provision_runtime_role.sql
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml cp ops/grant_runtime_privileges.sql postgres-test:/tmp/grant_runtime_privileges.sql
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml exec -T postgres-test psql -v ON_ERROR_STOP=1 -v runtime_role=todo_test_runtime -U $env:TEST_POSTGRES_USER -d todo_test -f /tmp/grant_runtime_privileges.sql
+```
+
+Set `TEST_DATABASE_URL` and `RUNTIME_DATABASE_URL` from `.env.test` in the same process. The Go and Playwright guards require loopback, port `25432`, exact database `todo_test`, reject target-changing URL options, and reject a test target equal to `DATABASE_URL`. `ops/Invoke-TestMigrations.ps1` derives Tern's process-only `PG*` variables from the validated test URL and uses only `tern.test.conf`; run its `status` action before `migrate`. Set `REQUIRE_POSTGRES_INTEGRATION=1` when running Go tests so missing test configuration fails instead of skipping. The test URL is never a fallback to `DATABASE_URL`.
+
+Run PostgreSQL integration tests only after migrations and runtime-role provisioning complete. The already-loaded `.env.test` process must provide both database URLs; requiring integration coverage makes a missing test URL fail instead of silently skipping:
+
+```powershell
+$env:REQUIRE_POSTGRES_INTEGRATION = '1'
+try { go test -count=1 ./... } finally { Remove-Item Env:REQUIRE_POSTGRES_INTEGRATION -ErrorAction SilentlyContinue }
+```
+
+To stop only the test service while preserving its isolated data, use `docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml stop postgres-test`. Do not use `down -v`; deleting the test volume destroys the test database. Do not change, stop, or remove the development project or `todo-list_postgres-data` volume as part of test setup.
 
 Rotate credentials by creating a new randomly generated runtime password in the secret manager, changing the PostgreSQL role password with `psql`'s `\\password todo_runtime` prompt, updating the application secret, and rolling the API instances. Confirm readiness before removing the previous credential. Rotate the migration/admin credential separately and restrict its use to migration and recovery operations.
 
@@ -99,7 +184,7 @@ Point a temporary API process at the restored database using `todo_runtime`, run
 - If startup fails, check configuration names and role privileges without printing secret-bearing URLs. For a database error, verify DNS/network reachability, certificate trust and hostname, migrations, runtime grants, and pool limits.
 - If an authentication endpoint returns 429, review the configured shared PostgreSQL window and wait for expiry. If PostgreSQL is down, authentication fails closed with a generic error; it never disables the rate limit.
 - If requests through the proxy receive a host error or rate limits group clients incorrectly, verify `Host`, the actual proxy peer address, and the exact `TRUSTED_PROXY_CIDRS`. Forwarded headers from untrusted peers are ignored.
-- The maintenance worker deletes expired/old revoked sessions and expired rate-limit rows in bounded batches every 15 minutes. It logs a generic warning if cleanup fails; authentication remains available subject to the existing shared rate limits.
+- The maintenance worker deletes expired/old revoked sessions and expired rate-limit rows in bounded batches every 15 minutes. Ordinary rate-limit requests do not purge unrelated expired keys; only a new key request at the 100,000-row cap performs the minimum locked, bounded expiry cleanup needed to make room, failing closed if capacity remains exhausted. It logs a generic warning if maintenance cleanup fails; authentication remains available subject to the existing shared rate limits.
 - The runtime role has no schema-management rights. Run Tern with the migration account, not `DATABASE_URL`.
 
 ## Security review and deferred work
@@ -107,3 +192,15 @@ Point a temporary API process at the restored database using `todo_runtime`, run
 Local code/test review found no P0 or P1 issue after the fixes in this phase. Existing owner-scoped SQL, foreign keys, optimistic versions, transactions, bounded JSON request sizes, same-origin state-changing requests, Argon2id, hashed random sessions, and cookie protections remain in place. The auth service uses PostgreSQL-backed atomic IP/account limits with a hard cap of 100,000 active keys; limiter storage errors fail closed. Registration returns the same generic 202 response for new and existing accounts. Browser rendering uses text nodes rather than HTML insertion.
 
 Email Verification and Password Reset are **DEFERRED — POST-DEPLOYMENT**. They require a real domain, HTTPS, and an email provider. No email tables, endpoints, screens, tokens, or delivery dependencies were added in this phase. Local verification does not certify production security. P0/P1 and P2/P3 findings must be reassessed after the actual host, proxy, database, secret store, and operational recovery process are configured.
+
+## Admin account-management schema and privileges
+
+Migration `014_admin_account_audit.sql` adds append-only `app.admin_audit_events`, a private `app.active_admin_guard` counter, and a `SECURITY DEFINER` row trigger that atomically rejects a transition which would leave no active Admin. The migration is intentionally forward-only: rolling it back would erase audit history and remove the final-Admin invariant. Migration `015_allow_initial_admin_bootstrap_audit.sql` permits only the system-attributed initial-bootstrap action and refuses rollback after such an event exists. Read-only Tern status on 2026-11-11 reported `todo_dev` at 14/15 and `todo_test` at 15/15; migration 015 was applied only to `todo_test`. The read-only `adminctl status` confirmed zero active Admins and guard count zero on `todo_dev`; no account was promoted. After applying migration 014 to another database, rerun `ops/provision_runtime_role.sql` and `ops/grant_runtime_privileges.sql` for that same database before starting the application.
+
+The application runtime role retains table-level `SELECT`/`INSERT` on `app.users` and has column-level `UPDATE` only on `time_zone`, `role`, `status`, and `updated_at`; it has no table-level UPDATE, DELETE, TRUNCATE, or access to `app.active_admin_guard`. It may insert `app.admin_audit_events` but cannot read or change the audit trail. Each role/status/session-revocation action rechecks the actor's active Admin state inside a transaction, serializes account-management operations, revokes the target's active sessions, and commits its safe before/after audit record atomically. Keep the runtime grants and `VerifyRuntimeRole` policy synchronized; production startup must fail closed if effective privileges drift.
+
+Only the Admin HTTP handlers expose role/status/session operations. The API rejects self-management, validates allowlisted role/status values, returns generic storage errors, and does not hard-delete users. Disabling preserves user-owned tasks and history. Re-enabling does not restore revoked sessions. Session revocation targets all active sessions for one non-self target; no raw session token or hash is listed or returned. Successful changes are audited with actor/target IDs, action, role/status or active-session counts, and timestamp; passwords, tokens, email, and other personal fields are excluded.
+
+Normal registration continues to assign `USER`; there is no public Admin-registration endpoint. The dedicated `cmd/adminctl` tool provides a one-time status and bootstrap workflow. It requires an exact normalized email, a fixed verified database target, and an explicit confirmation flag for promotion. It refuses a nonzero active-Admin/guard count, a missing or ineligible target, a second bootstrap, unknown databases, and `todo_test` outside the dedicated automated-test mode. In one transaction it serializes account-management changes, locks the users table, guard row, and target account, promotes only the selected active USER, revokes the target's existing active sessions, writes a `INITIAL_ADMIN_BOOTSTRAPPED` audit event with a null system actor, and commits atomically. The audit payload contains only role, status, and session counts.
+
+Future first-Admin procedure: register the real owner through the normal flow and complete any company-required activation. Before the bootstrap, use the guarded development migration procedure with its required verified backup to apply pending migration 015; current read-only status is `todo_dev` 14/15, so bootstrap must not be attempted until status reports 15/15. Load `.env` settings with `Read-StrictEnvironmentFile`; run `go run ./cmd/adminctl status --database todo_dev --email $ownerEmail`; proceed only when the active-Admin and guard counts are both zero and the exact target is eligible; then run `go run ./cmd/adminctl bootstrap --database todo_dev --email $ownerEmail --confirm-database todo_dev`. The owner must log in again because existing sessions are revoked. Manage subsequent Admins through the authenticated Admin interface. The current schema has no email-verification field, so account eligibility currently means an active account with a normal USER role and valid stored name/email. Actual initial-Admin provisioning remains pending creation and approval of the real owner account; no placeholder or existing development account is to be promoted.

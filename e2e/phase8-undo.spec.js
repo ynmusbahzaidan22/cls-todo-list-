@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { createHash, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { expect, test } from "@playwright/test";
-import { getTestDatabaseURL } from "./test-database.js";
+import { getTestDatabaseURL, registerEmailRateLimitCleanup } from "./test-database.js";
 
 const testDatabaseURL = getTestDatabaseURL();
 test.describe.configure({ mode: "serial" });
@@ -11,9 +11,9 @@ const baseURL = process.env.PHASE8_BASE_URL || "http://127.0.0.1:18080";
 const runId = randomUUID().replaceAll("-", "").slice(0, 16);
 const emailPrefix = `phase8-e2e-${runId}`;
 const password = `Phase8-${randomUUID()}-${randomUUID()}`;
-const accountA = { email: `${emailPrefix}-a@example.test`, password };
-const accountB = { email: `${emailPrefix}-b@example.test`, password };
-const accountFor = (label) => ({ email: `${emailPrefix}-${label}@example.test`, password });
+const accountA = { name: "Undo User A", email: `${emailPrefix}-a@example.test`, password };
+const accountB = { name: "Undo User B", email: `${emailPrefix}-b@example.test`, password };
+const accountFor = (label) => ({ name: `Undo ${label}`, email: `${emailPrefix}-${label}@example.test`, password });
 const accountExpired = accountFor("expired");
 const accountStale = accountFor("stale");
 const accountConcurrent = accountFor("concurrent");
@@ -21,6 +21,9 @@ const accountSwitchA = accountFor("switch-a");
 const accountDuplicate = accountFor("duplicate");
 const accountSession = accountFor("session");
 const accountServerError = accountFor("server-error");
+const testClientIP = registerEmailRateLimitCleanup(test, [accountA, accountB, accountExpired, accountStale, accountConcurrent, accountSwitchA, accountDuplicate, accountSession, accountServerError]
+  .map((account) => account.email).concat(`${emailPrefix}-ui@example.test`));
+test.use({ extraHTTPHeaders: { "X-Forwarded-For": testClientIP } });
 let databasePool;
 
 async function createAccount(account) {
@@ -29,6 +32,7 @@ async function createAccount(account) {
     headers: {
       "Content-Type": "application/json",
       Origin: baseURL,
+      "X-Forwarded-For": testClientIP,
     },
     body: JSON.stringify(account),
   });
@@ -164,7 +168,9 @@ test("registers through the UI and verifies validation, keyboard access, loading
   await expect(page.locator("#auth-view")).toBeVisible();
   await page.getByRole("button", { name: "Create account" }).click();
   await page.locator("#register-submit").click();
+  await expect(page.locator("#register-name-error")).toHaveText("Enter a name with 1 to 100 characters.");
   await expect(page.locator("#register-email-error")).toHaveText("Enter your email address.");
+  await page.locator("#register-name").fill("Browser Test User");
   await page.locator("#register-email").fill(`${emailPrefix}-ui@example.test`);
   await page.locator("#register-password").fill(password);
   await page.locator("#register-confirm-password").fill(password);

@@ -12,7 +12,7 @@ This repository contains an HTML, CSS, and Vanilla JavaScript frontend with loca
 
 ## Local setup (Windows PowerShell)
 
-1. Copy `.env.example` to `.env` and replace the local-only `POSTGRES_PASSWORD` placeholder. The example connection URLs point to the same local database and are placeholders; before running tests, provision a separate test database and set `TEST_DATABASE_URL` to that database. `DATABASE_URL` is reserved for the API runtime role used by local development.
+1. Copy `.env.example` to `.env` and replace the local-only development placeholders. `DATABASE_URL` is reserved for the development runtime role and `todo_dev`. The test variables in that example are placeholders only: create a separate ignored `.env.test` as described below, and load it before running any PostgreSQL or Playwright integration tests. Those tests use the isolated `compose.test.yaml` project, its own volume, port `25432`, and exact database name `todo_test`; never point test URLs to the development service.
 2. Start PostgreSQL from the project directory:
 
    ```powershell
@@ -20,7 +20,7 @@ This repository contains an HTML, CSS, and Vanilla JavaScript frontend with loca
    docker-compose.exe -f compose.yaml ps
    ```
 
-   Wait until the `postgres` service reports `healthy`. Its port is bound to `127.0.0.1`; data lives in a named Docker volume, outside OneDrive.
+   Wait until the `postgres` service reports `healthy`. Its port is bound to `127.0.0.1`; data lives in a named Docker volume, outside OneDrive. The development service and volume are separate from the test environment described below.
 3. Load the non-secret local settings into the current PowerShell process, install the pinned migration CLI, and inspect/apply migrations:
 
    ```powershell
@@ -31,13 +31,19 @@ This repository contains an HTML, CSS, and Vanilla JavaScript frontend with loca
    }
    go install github.com/jackc/tern/v2@v2.4.3
    tern version
-   tern status --migrations migrations
-   tern migrate --migrations migrations
-   tern status --migrations migrations
+    .\ops\Invoke-DevelopmentMigrations.ps1 -Action status -ExpectedTargetVersion 15
    ```
 
-   Tern reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` while rendering `tern.conf`. The explicit `--migrations migrations` argument is required because Tern otherwise searches the current directory. Migrations 001–005 create the schema, auth/tasks, activity, Undo, and templates. Migration 006 adds bounded shared authentication rate-limit counters; migration 007 adds the recently-deleted listing index; migration 008 adds task and template-item priorities plus priority activity events; migration 009 adds due dates and account time zones; migration 010 adds stable template-item identities and tracks template application sets. Applying or deleting templates does not leave generated tasks linked to them. Tern tracks applied versions; rerunning the migrate command is safe. No down migrations are provided for the core application schema; migrations 008 and 010 have guarded rollbacks.
-4. Provision the runtime account using the administrator session. If the role has no password, the psql script prompts once for an initial password without echoing it; rerunning the script does not rotate an existing password. Choose a strong password, then put it only in the `DATABASE_URL` user info in `.env`. Keep the administrator URL for the separately provisioned test database in `TEST_DATABASE_URL` when running tests:
+The development wrapper loads `.env` without displaying values and verifies that `DATABASE_URL`, `tern.conf`, the running PostgreSQL container, published loopback port, named volume, database identity, PostgreSQL version, and migration inventory all match the guarded development target. Its `status` action is read-only. The wrapper advances exactly one expected migration per invocation; `migrate` also requires an explicit authorization switch, expected current and target versions, and zero other database sessions. Before migrating, follow the verified backup and restore procedure in [OPERATIONS.md](OPERATIONS.md). Historical evidence records that on 2026-11-11 `todo_dev` advanced from 13/14 to 14/14 after creating and restoring a fresh custom-format backup and matching all pre-existing application-table row fingerprints and schema definitions. Current read-only Tern status is 14/15:
+
+   ```powershell
+    .\ops\Invoke-DevelopmentMigrations.ps1 -Action status -ExpectedCurrentVersion 14 -ExpectedTargetVersion 15
+   ```
+
+If status reports another version, stop and review the pending migrations; do not change expected versions merely to make a command pass. The repository contains migrations 001–015 in numeric order: 001 creates the `app` schema; 002 creates authentication and task data; 003 adds activity history; 004 adds Safe Undo; 005 creates templates; 006 adds shared authentication rate limits; 007 adds the recently-deleted listing index; 008 adds task and template-item priorities and priority activity events; 009 adds due dates and account time zones; 010 adds stable template-item identities and tracks template application sets; 011 adds user names and roles; 012 enforces unique item positions within each template; 013 allows a null account time zone to mean “follow this device” while preserving saved IANA overrides; 014 adds Admin audit history and the database-level final-Admin guard; and 015 permits a system-attributed initial-Admin bootstrap audit event. Migration files in the repository do not establish which versions are applied to a database. The latest read-only status during this task reported `todo_dev` at 14/15 and `todo_test` at 15/15; no migration was applied to `todo_dev`. For test migrations, use only the guarded `ops/Invoke-TestMigrations.ps1` with `tern.test.conf`. Applying or deleting templates does not leave generated tasks linked to them.
+
+Down sections are migration-specific, not a general data reset. Migrations 002, 003, and 005 have no down section. Migration 001 drops the `app` schema and therefore succeeds only when the schema is empty. Migration 004 refuses rollback while Undo events exist; 008 and 009 refuse rollback while their non-default data or history exists; and 010 refuses rollback while template-application history exists. Migrations 006, 007, 012, and 013 remove their rate-limit table and state, recently-deleted index, template-position constraint, and device-time-zone support, respectively; 013 refuses rollback while any user has a null time zone. Migration 015 restores the prior audit constraint only if no initial-bootstrap event exists. Migrations 011 and 014 are intentionally forward-only and their down sections always raise an exception. Review each down section and its data conditions before requesting a rollback.
+4. Provision the runtime account using the development administrator session. If the role has no password, the psql script prompts once for an initial password without echoing it; rerunning the script does not rotate an existing password. Choose a strong password, then put it only in the `DATABASE_URL` user info in `.env`. Keep test administrator settings in `.env.test` and `TEST_DATABASE_URL`; never point either runtime or test URL at the same database:
 
    ```powershell
    docker-compose.exe -f compose.yaml cp ops/provision_runtime_role.sql postgres:/tmp/provision_runtime_role.sql
@@ -82,20 +88,59 @@ This repository contains an HTML, CSS, and Vanilla JavaScript frontend with loca
 | `POSTGRES_DB` | Compose/migrations | `todo_dev` | Local database name. |
 | `POSTGRES_USER` | Compose/migrations | `todo_dev` | Local database user. |
 | `POSTGRES_PASSWORD` | Compose/migrations | Set a local-only value | Local database password. |
-| `TEST_DATABASE_URL` | PostgreSQL and Playwright tests | Dedicated loopback test database URL | Explicit database URL for tests. It must identify a database separate from `DATABASE_URL`; Playwright never falls back to `DATABASE_URL`. |
+| `TEST_POSTGRES_DB` | Test Compose | `todo_test` | Database initialized only in the isolated test PostgreSQL instance. |
+| `TEST_POSTGRES_USER` | Test Compose | `todo_test_admin` | Test-instance administrator; its privileges do not extend to development PostgreSQL. |
+| `TEST_POSTGRES_PASSWORD` | Test Compose | Set a unique local-only value | Test-instance administrator password. |
+| `TEST_DATABASE_URL` | PostgreSQL and Playwright tests | `127.0.0.1:25432/todo_test` | Explicit test-instance administrator URL. It must differ from `DATABASE_URL`; tests never fall back to `DATABASE_URL`. |
+| `RUNTIME_DATABASE_URL` | Runtime-role integration tests | `127.0.0.1:25432/todo_test` | URL for the separately provisioned restricted `todo_test_runtime` role on the same isolated test server. |
+| `REQUIRE_POSTGRES_INTEGRATION` | No | unset | Set to `1` or `true` to fail Go integration tests when `TEST_DATABASE_URL` is missing rather than skip them. |
 
-`.env` is ignored by Git. `.env.example` contains placeholders only; its two example URLs share a database target and therefore must not be used unchanged for Playwright. Local migrations use the Compose administrative account; the API uses `todo_runtime`, and PostgreSQL integration tests use the explicitly configured `TEST_DATABASE_URL`. For E2E tests that URL must point to a separately provisioned test database. Production requires PostgreSQL TLS verification, explicit proxy CIDRs, secure cookies, and startup verification of runtime-role privileges. Real certificates, proxy, database service, and secret manager must still be provisioned by the deployment operator.
+`.env` and `.env.test` are ignored by Git. `.env.example` contains placeholders only, with a distinct exact `todo_test` target that must be provisioned before use. Local migrations use the development Compose administrative account; the API uses `todo_runtime`, and all PostgreSQL integration tests validate the explicit `TEST_DATABASE_URL` through the shared Go guard. Tests never fall back to `DATABASE_URL`; set `REQUIRE_POSTGRES_INTEGRATION=1` to make a missing test URL fail instead of skipping integration coverage. The validator requires loopback port `25432`, exact database `todo_test`, a different normalized target from `DATABASE_URL`, and rejects all connection query options except one valid `sslmode`. Playwright uses the same target validation. Production requires PostgreSQL TLS verification, explicit proxy CIDRs, secure cookies, and startup verification of runtime-role privileges. Real certificates, proxy, database service, and secret manager must still be provisioned by the deployment operator.
 
 ## Local authentication API
 
-- `POST /api/auth/register` with `{"email":"you@example.test","password":"at-least-12-characters"}` creates a local account immediately; it returns a generic 202 response for new and existing addresses to avoid account enumeration. Email delivery and verification are deferred.
+- `POST /api/auth/register` with `{"name":"Your name","email":"you@example.test","password":"at-least-12-characters"}` creates a local account immediately; `name` is trimmed and must contain 1–100 Unicode characters after trimming. The server assigns the `USER` role; registration does not accept a role. The endpoint returns a generic 202 response for new and existing addresses to avoid account enumeration. Email delivery and verification are deferred.
 - `POST /api/auth/login` with the same fields sets an HttpOnly, SameSite=Lax session cookie and returns only the public user fields.
 - `GET /api/auth/me` returns the user associated with the current valid session.
 - `POST /api/auth/logout` revokes the current server-side session and clears the cookie.
 
 The frontend checks `/api/auth/me` on page load and uses the browser's same-origin HttpOnly cookie. Login and registration submit directly to the Go API; registration does not require email verification. Passwords must be 12-128 characters. Session tokens are random and only their SHA-256 hashes are stored in PostgreSQL. Sessions expire after 7 days idle or 30 days absolute; bounded maintenance removes expired sessions and rate-limit buckets. PostgreSQL stores shared, atomic IP and account rate-limit counters; if PostgreSQL is unavailable, login and registration fail closed. Local development uses `SESSION_COOKIE_SECURE=false` only while bound to loopback. Production uses `__Host-` Secure cookies. Passwords use Argon2id.
 
-`GET /api/preferences` and `PUT /api/preferences` expose the account's stored IANA time zone preference. The current task-entry UI uses the device's detected time zone for calendar display and sends it with date-sensitive list requests; it does not currently show a manual time-zone selector or synchronize that detected value through the preferences endpoint.
+`GET /api/preferences` and `PUT /api/preferences` expose the account's nullable IANA time zone preference. A saved valid IANA zone is a manual account-wide override; setting it to `null` returns the account to the current browser/device zone. The signed-in UI exposes this preference, validates IANA names, loads it from the server, and sends the active zone with date-sensitive list requests. An unset preference is not silently converted into a permanent account value.
+
+## Administrator API and account management
+
+`GET /api/admin/users` and `GET /api/admin/tasks` require a valid session for an account whose server-loaded role is exactly `ADMIN`. Missing or invalid sessions return `401`; authenticated non-admin or unknown-role accounts receive `403`. The client cannot grant itself access by sending a role in a request. Both endpoints use bounded keyset pagination with `limit` (default 20, maximum 100) and an opaque signed `cursor` returned as `next_cursor`; cursors are bound to the endpoint and task filters. Invalid, repeated, unknown, or filter-mismatched query parameters return `400 invalid_pagination`.
+
+The user endpoint returns only `id`, `name`, `email`, `role`, `status`, `created_at`, and server-computed management capabilities. It never returns password hashes or session identifiers. The task endpoint returns task fields plus `owner_id` and `owner_name`; it does not return owner email or authentication data. Its default view includes all non-deleted tasks across owners, including every workflow status. `status` may be `TODO`, `IN_PROGRESS`, or `DONE`; `state` may be `active` (the default), `deleted`, or `all`.
+
+Admin mutations use `PATCH /api/admin/users/{userID}/role` with `{"role":"USER|ADMIN"}`, `PATCH /api/admin/users/{userID}/status` with `{"status":"ACTIVE|DISABLED"}`, and `POST /api/admin/users/{userID}/sessions/revoke`. They require the same authenticated server-side Admin role and trusted same-origin checks as other state-changing requests. Role or status changes revoke all current sessions for the target in the same transaction; disabled accounts cannot log in or use existing sessions. Self-management is rejected, and a database trigger prevents disabling or demoting the final active Admin even under concurrent requests. Successful mutations append an audit event containing actor, target, action, and role/status or session-count before/after state; credentials, tokens, and personal fields are excluded. No endpoint hard-deletes users. The UI renders only server-reported capabilities; API authorization remains authoritative.
+
+Migration `014_admin_account_audit.sql` creates the audit and final-Admin guard objects and is forward-only because rollback would erase audit history and the database invariant. Migration `015_allow_initial_admin_bootstrap_audit.sql` allows only the dedicated null-actor initial-bootstrap action; its rollback refuses once such an audit event exists. After applying migration 014 to a database, rerun the runtime-role grant workflow so the API can update only the `users` columns `time_zone`, `role`, `status`, and `updated_at`, insert audit events, and retain no direct access to the guard table. Migration-file presence does not establish that a database has applied it.
+
+### One-time initial Admin bootstrap
+
+`cmd/adminctl` is an operational CLI, not an HTTP endpoint. It can only target the fixed local development endpoint `127.0.0.1:15432/todo_dev` during normal operation. The isolated `todo_test` endpoint is accepted only when both `ADMINCTL_AUTOMATED_TEST=1` and `REQUIRE_POSTGRES_INTEGRATION=1` are set and both test URLs validate to that exact endpoint. The CLI requires the explicit database name, checks the connected database and database user, rejects PostgreSQL environment overrides, and never prints connection settings.
+
+After the actual owner account has been registered normally and is active, first verify through the guarded development migration status that `todo_dev` is at 15/15; migration 015 is currently pending there and must be applied only through the separately authorized guarded development migration procedure after its backup preconditions. Then load the development administrator settings into the process using the strict environment reader. Enter the exact normalized owner email and run the read-only status command. Proceed only if it reports zero active Admins, a zero guard count, and an eligible target. Bootstrap requires the matching `--confirm-database todo_dev` flag:
+
+```powershell
+Import-Module .\ops\DevelopmentMigrationGuard.psm1 -Force
+$settings = Read-StrictEnvironmentFile -Path (Join-Path (Get-Location) '.env')
+foreach ($name in @('POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'DATABASE_URL')) {
+  [Environment]::SetEnvironmentVariable($name, [string]$settings[$name], 'Process')
+}
+foreach ($name in @('PGHOST', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'PGSSLMODE', 'PGSERVICE', 'PGSERVICEFILE', 'PGPASSFILE')) {
+  Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+}
+$ownerEmail = Read-Host 'Exact normalized owner email'
+go run ./cmd/adminctl status --database todo_dev --email $ownerEmail
+if ($LASTEXITCODE -ne 0) { throw 'Bootstrap preflight failed; stop.' }
+go run ./cmd/adminctl bootstrap --database todo_dev --email $ownerEmail --confirm-database todo_dev
+if ($LASTEXITCODE -ne 0) { throw 'Bootstrap failed; inspect the safe CLI error and stop.' }
+```
+
+The CLI locks account changes and the active-Admin guard in one transaction, promotes only the selected active USER account, revokes its sessions, writes a system-attributed audit event, and commits atomically. The owner must log in again after session revocation. Subsequent Admins are managed through the authenticated Admin interface. Current implementation has no email-verification state; any company-required activation step must be completed before the account is eligible. Actual first-Admin provisioning remains pending until the real owner account exists and is approved. Do not promote a placeholder or an existing development account.
 
 ## Task API
 
@@ -116,11 +161,13 @@ All task endpoints require the authenticated session cookie. The server always d
 
 Task responses include `id`, `title`, `description`, `status`, `priority`, `due_date`, `is_overdue`, `completed_at`, `version`, `created_at`, `updated_at`, and `deleted_at`. Priority is `LOW`, `MEDIUM`, `HIGH`, or `URGENT`; omitted priority defaults to `MEDIUM`. Active tasks are ordered by workflow rank (`IN_PROGRESS`, then `TODO`, then recent `DONE` tasks still inside their review window), then by `created_at DESC, id DESC`; deleted tasks and older archived completions are excluded. `q` searches title and description for a case-insensitive literal substring; `%`, `_`, and `\\` are not wildcard operators. Search, status, priority, and due-date filters combine with AND semantics. Whitespace-only search means no search filter. Due-date filters are evaluated in the requested IANA time zone. Invalid, repeated, or oversized list query parameters and malformed, tampered, or filter-mismatched cursors return `400 invalid_pagination`. Active-list cursors are HMAC-signed and bound to the authenticated owner and normalized filters. Existing unsigned active-list cursors from older versions are rejected; restart pagination from the first page. Production requires a stable 32-byte `TASK_CURSOR_SIGNING_KEY` configured as 64 hexadecimal characters; rotation invalidates outstanding cursors. Local development generates a process-local key if omitted, so a server restart also invalidates cursors.
 
-Due dates are calendar dates, not timestamps. The frontend detects the device's IANA time zone and uses it to display due-today and overdue states; date-sensitive task and completed-list queries send that zone. The API's `is_overdue` value for a task-list request uses the requested zone; a direct single-task read uses the stored account zone. The visible browser badge follows the device zone. An active task due today is highlighted as due today, and an incomplete task whose due date is before today in that zone is highlighted as overdue. These states are derived from the date and current time on each view; no background job is needed.
+Task timestamp instants are serialized in UTC RFC3339 form. `due_date` remains a `YYYY-MM-DD` civil calendar date, not a timestamp, and is not converted between time zones.
+
+Due dates are calendar dates, not timestamps. The frontend detects the device's IANA time zone and uses it to display due-today and overdue states; date-sensitive task and completed-list queries send the active zone. The API's `is_overdue` value for a task-list request uses the requested zone; a direct single-task read uses the stored account zone or UTC when no manual zone is saved. The visible browser badge follows the selected device/manual zone. An active task due today is highlighted as due today, and an incomplete task whose due date is before today in that zone is highlighted as overdue. These states are derived from the date and current time on each view; no background job is needed.
 
 When a task is marked `DONE`, it remains in the active workspace for a 12-hour review window so Undo and follow-up edits remain available. After that window it appears in the read-only completed archive at `GET /api/tasks/completed`. The transition is calculated from the database clock when task lists/counts are queried; no worker or scheduled process is required. A task changed back to an active status returns to the active workspace. Archive period filters use local calendar boundaries in the requested IANA zone: weeks begin Monday, and date intervals use an inclusive start and exclusive end. Archive pages pin their cutoff and period boundaries in the cursor so counts and pagination remain consistent while browsing. Archived tasks cannot be edited, deleted, bulk-mutated, or undone through the API; their activity history remains readable.
 
-Keyset pagination is not a database snapshot across requests: concurrent task changes can move a task into or out of a later page. Changing search, status, or priority starts again from the first page.
+Task-list cursors use deterministic keyset ordering with a unique ID tie-breaker and pin a timestamp boundary; rows created or updated after that boundary are excluded from later pages, while deleted rows naturally disappear. This is a timestamp-bounded traversal, not a long-lived PostgreSQL MVCC snapshot: an in-flight transaction that began before the boundary and commits afterward can still expose a row with pre-boundary timestamps. Changing search, status, or priority starts again from the first page.
 
 Priority is independent of workflow status. Create and edit forms support all four values. The workspace filter combines with search and status; clearing or changing filters resets pagination and selection. Bulk status/deletion operations preserve task priority. A changed priority creates a `TASK_PRIORITY_CHANGED` activity event and can be undone under the same version and same-field conflict rules as other task fields.
 
@@ -150,9 +197,9 @@ Templates are private to their owner. The authenticated `/api/task-templates` en
 
 - The repository contains local Docker configuration and production-oriented examples, but no public deployment, real TLS endpoint, external production database, reverse proxy, secret manager, off-host backup service, or production recovery process has been configured or verified.
 - Email verification and password reset are deferred; registration is local and does not send email.
-- Task pagination is keyset-based but is not a database snapshot across separate requests; concurrent task changes can affect later pages. Completed archive cursors pin their cutoff and period boundaries.
+- Task and Admin pagination use signed keyset cursors, deterministic tie-breakers, and timestamp boundaries; rows changed after the boundary are excluded and deleted rows disappear. This is not a long-lived MVCC snapshot, so a pre-boundary in-flight transaction can commit afterward with pre-boundary timestamps. Completed archive cursors also pin their cutoff and period boundaries.
 - Undo intentionally does not reverse task creation, task restoration, or another Undo event. Deleted tasks can only be restored during the 24-hour recovery window.
-- The visible due-date state follows the browser device time zone. The account preference endpoints remain available for stored IANA time zones, but the current interface does not expose a manual time-zone control.
+- Due dates remain civil calendar dates. The visible due-date state follows the browser/device IANA time zone unless the user saves a manual account-wide IANA override; clearing the override returns to device time. DST and date-boundary behavior is covered by PostgreSQL and browser tests.
 - No CI/CD pipeline or production-scale load result is documented as configured in this repository.
 
 ## Verification
@@ -169,13 +216,77 @@ node --check script.js
 
 `gofmt -l` is a read-only formatting check; no output means all listed Go files are formatted. Run `npm run test:html` for HTML validation. The Playwright project has focused scripts for Phases 8, 9, 10, 13, 14, 15, 16, and 17–18, plus `npm run test:e2e` for the complete configured browser suite.
 
-Database integration tests require PostgreSQL and applied migrations. Set `TEST_DATABASE_URL` to a dedicated test database in the current PowerShell process before running `go test ./...`; do not use a database containing development or production data. The integration tests accept loopback PostgreSQL only and clean up their uniquely named test accounts. Activity, Undo, and bulk-operation integration tests temporarily install uniquely named test-only PostgreSQL triggers to force transaction failures and remove those triggers and functions during cleanup. After applying migrations, run `tern migrate --migrations migrations` a second time and confirm it reports no pending migrations. Stop PostgreSQL with `docker-compose.exe -f compose.yaml down`; this preserves the named data volume. Do not add `-v` unless intentionally deleting local database data.
+### Isolated PostgreSQL integration-test database
+
+The full PostgreSQL suite uses a separate Compose project and PostgreSQL server because runtime-role tests create temporary server-level roles. The test service uses database `todo_test`, host port `25432` bound only to `127.0.0.1`, its own `todo-list-test_postgres-test-data` volume, and a dedicated project-scoped network. This network is not marked internal, so the test container may have outbound network access; it does not mount or share the development service volume/network. The test URL guard requires that exact host class, port, and database name; it also rejects a target equal to `DATABASE_URL` and unsupported connection parameters.
+
+Create an ignored `.env.test` containing only the following settings. Replace each password placeholder with a different strong local secret. URL-safe random passwords avoid escaping ambiguity; if a password contains special characters, percent-encode them in the URL user-info values. `.env.test` matches the `.env.*` ignore rule and is excluded from Docker build context. Do not copy credentials from `.env`.
+
+```text
+TEST_POSTGRES_DB=todo_test
+TEST_POSTGRES_USER=todo_test_admin
+TEST_POSTGRES_PASSWORD=replace_with_a_unique_test_admin_password
+TEST_DATABASE_URL=postgres://todo_test_admin:replace_with_a_unique_test_admin_password@127.0.0.1:25432/todo_test?sslmode=disable
+RUNTIME_DATABASE_URL=postgres://todo_test_runtime:replace_with_a_unique_runtime_password@127.0.0.1:25432/todo_test?sslmode=disable
+```
+
+Load these values into the current PowerShell process without echoing them, check the required settings and exact database name, validate `TEST_DATABASE_URL` with the shared guard, verify `RUNTIME_DATABASE_URL` uses the same isolated endpoint, validate Compose configuration, and only then start the test service:
+
+```powershell
+Get-Content .env.test | ForEach-Object {
+  if ($_ -match '^\s*([^#=\s]+)\s*=\s*(.*?)\s*$') {
+    [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+  }
+}
+foreach ($name in @('TEST_POSTGRES_DB', 'TEST_POSTGRES_USER', 'TEST_POSTGRES_PASSWORD', 'TEST_DATABASE_URL', 'RUNTIME_DATABASE_URL')) {
+  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) { throw "Required test setting is missing: $name" }
+}
+if ($env:TEST_POSTGRES_DB -cne 'todo_test') { throw 'TEST_POSTGRES_DB must be todo_test.' }
+node --input-type=module -e "import { validateTestDatabaseConfiguration } from './e2e/test-database.js'; validateTestDatabaseConfiguration(); console.log('Test database URL configuration is valid.')"
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml config --quiet
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml up -d postgres-test
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml ps
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml exec -T postgres-test pg_isready -U $env:TEST_POSTGRES_USER -d todo_test
+docker volume inspect todo-list-test_postgres-test-data
+```
+
+Apply test migrations before provisioning the runtime role, because the privilege scripts grant access to schema objects created by those migrations. The helper validates `TEST_DATABASE_URL`, derives Tern's process-only `PG*` settings from it, and uses `tern.test.conf` (never the development `tern.conf`):
+
+```powershell
+.\ops\Invoke-TestMigrations.ps1 -Action status
+.\ops\Invoke-TestMigrations.ps1 -Action migrate
+.\ops\Invoke-TestMigrations.ps1 -Action status
+```
+
+The test container's `todo_test_admin` is a PostgreSQL administrator only inside this isolated instance. The existing runtime-role test checks the admin remains a superuser while exercising role creation and privilege checks. After migrations succeed, provision a distinct restricted application role using the existing scripts' supported `runtime_role` variable; the provision script prompts for its password without echoing it. Use that same separate secret in `RUNTIME_DATABASE_URL`:
+
+```powershell
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml cp ops/provision_runtime_role.sql postgres-test:/tmp/provision_runtime_role.sql
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml exec -it postgres-test psql -v ON_ERROR_STOP=1 -v runtime_role=todo_test_runtime -U $env:TEST_POSTGRES_USER -d todo_test -f /tmp/provision_runtime_role.sql
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml cp ops/grant_runtime_privileges.sql postgres-test:/tmp/grant_runtime_privileges.sql
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml exec -T postgres-test psql -v ON_ERROR_STOP=1 -v runtime_role=todo_test_runtime -U $env:TEST_POSTGRES_USER -d todo_test -f /tmp/grant_runtime_privileges.sql
+```
+
+After migrations and role provisioning succeed, run PostgreSQL integration tests. The loaded process must contain both `TEST_DATABASE_URL` and `RUNTIME_DATABASE_URL`; `REQUIRE_POSTGRES_INTEGRATION` makes missing test configuration fail instead of silently skipping:
+
+```powershell
+$env:REQUIRE_POSTGRES_INTEGRATION = '1'
+try { go test -count=1 ./... } finally { Remove-Item Env:REQUIRE_POSTGRES_INTEGRATION -ErrorAction SilentlyContinue }
+```
+
+The Go and Playwright guards never fall back to `DATABASE_URL`; runtime-role tests use `RUNTIME_DATABASE_URL` and verify that it targets the same isolated endpoint. Set its password to the same separate secret entered at the hidden runtime-role prompt. Never use development or production data for tests. To stop only the test service while retaining its data, run:
+
+```powershell
+docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml stop postgres-test
+```
+
+Do not use `down -v`; removing the named volume would delete the test database. Development commands continue to use `compose.yaml`, `tern.conf`, and the separate `todo-list_postgres-data` volume.
 
 ### Phase 8 browser QA
 
-Browser tests use Playwright, Axe, and `pg` as Node development dependencies only; none are Go runtime dependencies. Node.js 20.12 or newer and a separately provisioned loopback PostgreSQL test database with all ten migrations applied are required. Set `TEST_DATABASE_URL` explicitly in the environment or in the ignored `.env` before running Playwright. `DATABASE_URL` is never used as a fallback, and configuration rejects a test URL that identifies the same database as `DATABASE_URL`, even when the credentials differ. The Go API process started by Playwright receives the validated test URL as both `DATABASE_URL` and `TEST_DATABASE_URL`, so it cannot silently connect through the development runtime URL. The configuration does not connect to, create, reset, drop, or migrate a database; provision and migrate the test database yourself. A loopback host is not proof that a database is disposable: never point E2E tests at development data or production data.
+Browser tests use Playwright, Axe, and `pg` as Node development dependencies only; none are Go runtime dependencies. Node.js 20.12 or newer and the isolated test PostgreSQL database described above, with required migrations applied, are required. Load the dedicated `.env.test` settings into the current process before running Playwright; do not rely on test placeholders copied into `.env`. `DATABASE_URL` is never used as a fallback, and configuration rejects a test URL that identifies the same database as `DATABASE_URL`, even when credentials differ. The Go API process started by Playwright receives the validated test URL as `DATABASE_URL`, not the parent process's database variables, so it cannot silently use the development runtime URL. Playwright configuration itself does not connect to, create, reset, drop, or migrate a database. Never point E2E tests at development or production data.
 
-For example, set the URL to your own dedicated test database without putting it in a command-line argument or committing it. In PowerShell, set `$env:TEST_DATABASE_URL` in the current process; in a POSIX shell, export `TEST_DATABASE_URL`. Use a loopback host (`127.0.0.1`, `localhost`, or `::1`) and a database name different from the one in `DATABASE_URL`. Do not use the `.env.example` test URL unchanged; it is a setup placeholder, not a dedicated test database provisioned for E2E use. Go is resolved as `go` through `PATH` by default; set `GO_EXE` only when you need a specific executable. By default, Playwright uses the installed stable Chrome channel. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an approved local browser binary or `PLAYWRIGHT_BROWSER_CHANNEL` to another installed Chromium channel if needed.
+The test URL must use one supported loopback spelling, port `25432`, and database `todo_test`; all connection options other than one valid `sslmode` are rejected. Do not use `.env.example` test URLs unchanged; they are placeholders, not provisioned credentials. Go is resolved as `go` through `PATH` by default; set `GO_EXE` only when you need a specific executable. By default, Playwright uses the installed stable Chrome channel. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an approved local browser binary or `PLAYWRIGHT_BROWSER_CHANNEL` to another installed Chromium channel if needed.
 
 
 From PowerShell, install the locked test dependencies and run the suite:

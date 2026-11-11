@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { expect, test } from "@playwright/test";
-import { getTestDatabaseURL } from "./test-database.js";
+import { getTestDatabaseURL, registerEmailRateLimitCleanup } from "./test-database.js";
 
 const testDatabaseURL = getTestDatabaseURL();
 test.describe.configure({ mode: "serial" });
@@ -10,9 +10,11 @@ test.describe.configure({ mode: "serial" });
 const baseURL = process.env.PHASE8_BASE_URL || "http://127.0.0.1:18080";
 const prefix = `phase16-due-${randomUUID().replaceAll("-", "").slice(0, 18)}`;
 const accounts = [
-  { email: `${prefix}-a@example.test`, password: `Phase16-${randomUUID()}-${randomUUID()}` },
-  { email: `${prefix}-b@example.test`, password: `Phase16-${randomUUID()}-${randomUUID()}` },
+  { name: "Due Date User A", email: `${prefix}-a@example.test`, password: `Phase16-${randomUUID()}-${randomUUID()}` },
+  { name: "Due Date User B", email: `${prefix}-b@example.test`, password: `Phase16-${randomUUID()}-${randomUUID()}` },
 ];
+const testClientIP = registerEmailRateLimitCleanup(test, accounts.map((account) => account.email));
+test.use({ extraHTTPHeaders: { "X-Forwarded-For": testClientIP } });
 let pool;
 
 async function signIn(page, account) {
@@ -35,7 +37,7 @@ async function openTaskEdit(page, title) {
 test.beforeAll(async () => {
   for (const account of accounts) {
     const response = await fetch(`${baseURL}/api/auth/register`, {
-      method: "POST", headers: { "Content-Type": "application/json", Origin: baseURL }, body: JSON.stringify(account),
+      method: "POST", headers: { "Content-Type": "application/json", Origin: baseURL, "X-Forwarded-For": testClientIP }, body: JSON.stringify(account),
     });
     if (response.status !== 202) throw new Error(`Could not register isolated Phase 16 account (${response.status}).`);
   }
@@ -91,6 +93,27 @@ test("overdue status follows the currently opened device timezone, not the accou
   } finally {
     await secondContext.close();
   }
+});
+
+test("manual IANA timezone override persists across reload and can return to the device zone", async ({ page }) => {
+  await signIn(page, accounts[1]);
+  await page.locator("#timezone-preference > summary").click();
+  const input = page.locator("#timezone-override-input");
+  await input.fill("America/Los_Angeles");
+  await page.locator("#save-timezone-override").click();
+  await expect(page.locator("#timezone-preference-feedback")).toContainText("saved");
+  await expect(page.locator("#timezone-preference-summary")).toHaveText("Using America/Los_Angeles");
+
+  await page.reload();
+  await expect(page.locator("#todo-view")).toBeVisible();
+  await page.locator("#timezone-preference > summary").click();
+  await expect(input).toHaveValue("America/Los_Angeles");
+  await page.locator("#use-device-timezone").click();
+  await expect(page.locator("#timezone-preference-summary")).toContainText("Using your device time zone");
+
+  const response = await page.request.get(`${baseURL}/api/preferences`);
+  expect(response.ok()).toBeTruthy();
+  expect((await response.json()).time_zone).toBeNull();
 });
 
 test("due date creation, editing, clearing, filtering, civil date display, timezone, ownership and responsive accessibility", async ({ page, context }) => {

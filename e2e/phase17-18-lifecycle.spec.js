@@ -2,14 +2,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { expect, test } from "@playwright/test";
-import { getTestDatabaseURL } from "./test-database.js";
+import { getTestDatabaseURL, registerEmailRateLimitCleanup } from "./test-database.js";
 
 const testDatabaseURL = getTestDatabaseURL();
 test.describe.configure({ mode: "serial" });
 
 const baseURL = process.env.PHASE8_BASE_URL || "http://127.0.0.1:18080";
 const prefix = `phase17-18-${randomUUID().replaceAll("-", "").slice(0, 18)}`;
-const accounts = [0, 1].map((index) => ({ email: `${prefix}-${index}@example.test`, password: `Phase17-18-${randomUUID()}-${randomUUID()}` }));
+const accounts = [0, 1].map((index) => ({ name: `Lifecycle User ${index + 1}`, email: `${prefix}-${index}@example.test`, password: `Phase17-18-${randomUUID()}-${randomUUID()}` }));
+const testClientIP = registerEmailRateLimitCleanup(test, accounts.map((account) => account.email));
+test.use({ extraHTTPHeaders: { "X-Forwarded-For": testClientIP } });
 const testViewports = [{ width: 1440, height: 1000 }, { width: 768, height: 1024 }, { width: 375, height: 812 }];
 let pool;
 
@@ -42,7 +44,7 @@ async function assertNoSeriousAxeIssues(page) {
 test.beforeAll(async () => {
   for (const account of accounts) {
     const response = await fetch(`${baseURL}/api/auth/register`, {
-      method: "POST", headers: { "Content-Type": "application/json", Origin: baseURL }, body: JSON.stringify(account),
+      method: "POST", headers: { "Content-Type": "application/json", Origin: baseURL, "X-Forwarded-For": testClientIP }, body: JSON.stringify(account),
     });
     if (response.status !== 202) throw new Error(`Could not register isolated Phase 17/18 account (${response.status}).`);
   }

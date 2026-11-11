@@ -30,7 +30,7 @@ func (r *TaskRepository) ListContext(ctx context.Context, userID, requestedZone 
 	var err error
 	if requestedZone == "" {
 		err = r.pool.QueryRow(ctx, `WITH db_clock AS (SELECT statement_timestamp() AS as_of)
-			SELECT u.time_zone, to_char((db_clock.as_of AT TIME ZONE u.time_zone)::date, 'YYYY-MM-DD'), db_clock.as_of
+			SELECT COALESCE(u.time_zone, 'UTC'), to_char((db_clock.as_of AT TIME ZONE COALESCE(u.time_zone, 'UTC'))::date, 'YYYY-MM-DD'), db_clock.as_of
 			FROM app.users AS u CROSS JOIN db_clock WHERE u.id = $1`, userID).Scan(&zone, &localDate, &cutoff)
 	} else {
 		err = r.pool.QueryRow(ctx, `WITH db_clock AS (SELECT statement_timestamp() AS as_of)
@@ -49,7 +49,7 @@ const taskListColumns = `
 const taskColumns = `
 	id::text, title, COALESCE(description, ''), status, priority, due_date, completed_at,
 	version, created_at, updated_at, deleted_at,
-	COALESCE(due_date < ((clock_timestamp() AT TIME ZONE (SELECT time_zone FROM app.users WHERE id = user_id))::date)
+	COALESCE(due_date < ((clock_timestamp() AT TIME ZONE (SELECT COALESCE(time_zone, 'UTC') FROM app.users WHERE id = user_id))::date)
 	 AND status <> 'DONE' AND deleted_at IS NULL, FALSE) AS is_overdue`
 
 func (r *TaskRepository) Create(ctx context.Context, userID, title, description, status string, priorities ...string) (task.Task, error) {
@@ -116,6 +116,8 @@ func (r *TaskRepository) List(ctx context.Context, userID string, filter task.Li
 		FROM app.tasks
 		WHERE user_id = $1
 		  AND deleted_at IS NULL
+		  AND created_at <= $14::timestamptz
+		  AND updated_at <= $14::timestamptz
 		  AND ($2 = '' OR (title ILIKE $2 ESCAPE E'\\' OR COALESCE(description, '') ILIKE $2 ESCAPE E'\\'))
 		  AND ($3 = '' OR status = $3)
 		  AND ($4 = '' OR priority = $4)
@@ -158,6 +160,8 @@ func (r *TaskRepository) CountCompleted(ctx context.Context, userID string, from
 		FROM app.tasks
 		WHERE user_id = $1
 		  AND deleted_at IS NULL
+		  AND created_at <= $4::timestamptz
+		  AND updated_at <= $4::timestamptz
 		  AND status = 'DONE'
 		  AND completed_at <= $4::timestamptz - interval '12 hours'
 		  AND ($2::timestamptz IS NULL OR completed_at >= $2::timestamptz)
@@ -172,24 +176,31 @@ func (r *TaskRepository) ListDeleted(ctx context.Context, userID string, cursor 
 	var cutoff any
 	var cursorTime any
 	var cursorID any
+	var snapshotAt any
 	if cursor != nil {
 		cutoff = cursor.Cutoff
 		cursorTime = cursor.DeletedAt
 		cursorID = cursor.ID
+		snapshotAt = cursor.SnapshotAt
 	}
 	rows, err := r.pool.Query(ctx, `
-		WITH recovery_window AS (
-			SELECT statement_timestamp() - interval '24 hours' AS cutoff
+		WITH snapshot AS (
+			SELECT COALESCE($6::timestamptz, statement_timestamp()) AS at
+		), recovery_window AS (
+			SELECT COALESCE($2::timestamptz, snapshot.at - interval '24 hours') AS cutoff, snapshot.at
+			FROM snapshot
 		)
 		SELECT `+taskColumns+`, recovery_window.cutoff
 		FROM app.tasks
 		CROSS JOIN recovery_window
 		WHERE user_id = $1
 		  AND deleted_at IS NOT NULL
+		  AND created_at <= recovery_window.at
+		  AND updated_at <= recovery_window.at
 		  AND deleted_at >= COALESCE($2::timestamptz, recovery_window.cutoff)
 		  AND ($3::timestamptz IS NULL OR (deleted_at, id) < ($3::timestamptz, $4::uuid))
 		ORDER BY deleted_at DESC, id DESC
-		LIMIT $5`, userID, cutoff, cursorTime, cursorID, maxRows)
+		LIMIT $5`, userID, cutoff, cursorTime, cursorID, maxRows, snapshotAt)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -226,6 +237,13 @@ func (r *TaskRepository) ListDeleted(ctx context.Context, userID string, cursor 
 		return nil, time.Time{}, err
 	}
 	return items, pageCutoff, nil
+}
+
+func snapshotTime(cursor *task.DeletedCursor) any {
+	if cursor == nil {
+		return nil
+	}
+	return cursor.SnapshotAt
 }
 
 func (r *TaskRepository) CountDeleted(ctx context.Context, userID string) (int, error) {
@@ -564,10 +582,13 @@ func (r *TaskRepository) ListActivity(ctx context.Context, userID, taskID string
 	}
 	var cursorTime any
 	var cursorID any
+	var cursorSnapshot any
 	if cursor != nil {
 		cursorTime, cursorID = cursor.CreatedAt, cursor.ID
+		cursorSnapshot = cursor.SnapshotAt
 	}
 	rows, err := r.pool.Query(ctx, `
+		WITH snapshot AS (SELECT COALESCE($5::timestamptz, statement_timestamp()) AS at)
 		SELECT a.id::text, a.task_id::text, a.actor_user_id::text, a.event_type,
 		       a.previous_value, a.new_value, a.created_at,
 		       COALESCE(a.undo_of_event_id::text, ''), t.version, t.title,
@@ -617,13 +638,16 @@ func (r *TaskRepository) ListActivity(ctx context.Context, userID, taskID string
 		       ),
 		       CASE WHEN a.event_type = 'TASK_DELETED'
 	         THEN (a.new_value->>'deleted_at')::timestamptz < clock_timestamp() - interval '24 hours'
-	         ELSE FALSE END
+	         ELSE FALSE END,
+		       snapshot.at
 		FROM app.task_activity a
 		JOIN app.tasks t ON t.id = a.task_id AND t.user_id = a.user_id
+		CROSS JOIN snapshot
 		WHERE a.user_id = $1 AND a.task_id = $2
+		  AND a.created_at <= snapshot.at
 		  AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::uuid))
 		ORDER BY a.created_at DESC, a.id DESC
-		LIMIT $5`, userID, taskID, cursorTime, cursorID, maxRows)
+		LIMIT $6`, userID, taskID, cursorTime, cursorID, cursorSnapshot, maxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -640,7 +664,7 @@ func (r *TaskRepository) ListActivity(ctx context.Context, userID, taskID string
 		if err := rows.Scan(
 			&item.ID, &item.TaskID, &item.ActorUserID, &item.EventType, &previous, &current, &item.CreatedAt,
 			&item.UndoOfEventID, &currentVersion, &currentTitle, &currentDescription, &currentStatus, &currentPriority, &dueDate, &taskDeletedAt,
-			&alreadyUndone, &laterTitle, &laterDescription, &laterStatus, &laterPriority, &laterDeletion, &laterDueDate, &deletionExpired,
+			&alreadyUndone, &laterTitle, &laterDescription, &laterStatus, &laterPriority, &laterDeletion, &laterDueDate, &deletionExpired, &item.SnapshotAt,
 		); err != nil {
 			return nil, err
 		}

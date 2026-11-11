@@ -17,7 +17,7 @@ import (
 const maxAuthBodyBytes = 16 * 1024
 
 type AuthService interface {
-	Register(context.Context, string, string, string) (auth.User, error)
+	Register(context.Context, string, string, string, string) (auth.User, error)
 	Login(context.Context, string, string, string) (auth.User, string, time.Time, error)
 	Authenticate(context.Context, string) (auth.User, error)
 	Logout(context.Context, string) error
@@ -35,11 +35,14 @@ func NewAuthHandlers(service AuthService, cookieName string, cookieSecure bool) 
 
 type publicUser struct {
 	ID        string    `json:"id"`
+	Name      string    `json:"name"`
 	Email     string    `json:"email"`
+	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 type authInput struct {
+	Name     string `json:"name,omitempty"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -60,7 +63,7 @@ func (h *AuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 	if !decodeAuthInput(w, r, &input) {
 		return
 	}
-	_, err := h.service.Register(r.Context(), input.Email, input.Password, clientIP(r))
+	_, err := h.service.Register(r.Context(), input.Name, input.Email, input.Password, clientIP(r))
 	if err != nil && !errors.Is(err, auth.ErrEmailTaken) {
 		writeAuthError(w, err)
 		return
@@ -82,7 +85,7 @@ func (h *AuthHandlers) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, h.cookieName, token, expiresAt, h.cookieSecure)
-	writeJSONStatus(w, http.StatusOK, publicUser{ID: user.ID, Email: user.Email, CreatedAt: user.CreatedAt})
+	writeJSONStatus(w, http.StatusOK, publicUser{ID: user.ID, Name: user.Name, Email: user.Email, Role: user.Role, CreatedAt: user.CreatedAt})
 }
 
 func (h *AuthHandlers) me(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +94,7 @@ func (h *AuthHandlers) me(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, auth.ErrUnauthenticated)
 		return
 	}
-	writeJSONStatus(w, http.StatusOK, publicUser{ID: user.ID, Email: user.Email, CreatedAt: user.CreatedAt})
+	writeJSONStatus(w, http.StatusOK, publicUser{ID: user.ID, Name: user.Name, Email: user.Email, Role: user.Role, CreatedAt: user.CreatedAt})
 }
 
 func (h *AuthHandlers) logout(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +123,23 @@ func (h *AuthHandlers) requireAuthentication(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), userContextKey{}, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// requireAdmin authorizes only the role loaded by the server-side session check.
+// Unknown roles fail closed with the same response as an ordinary USER.
+func (h *AuthHandlers) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authenticatedUser(r)
+		if !ok {
+			writeAuthError(w, auth.ErrUnauthenticated)
+			return
+		}
+		if user.Role != "ADMIN" {
+			writeJSONStatus(w, http.StatusForbidden, apiError{Error: errorBody{Code: "forbidden", Message: "Administrator access is required."}})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

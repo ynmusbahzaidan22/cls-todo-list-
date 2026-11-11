@@ -259,7 +259,7 @@ func (r *TemplateRepository) ApplyTemplate(ctx context.Context, userID, template
 	if len(timeZones) > 0 && timeZones[0] != "" {
 		dateErr = tx.QueryRow(ctx, `SELECT to_char((clock_timestamp() AT TIME ZONE $2::text)::date, 'YYYY-MM-DD') FROM app.users WHERE id = $1`, userID, timeZones[0]).Scan(&baseDate)
 	} else {
-		dateErr = tx.QueryRow(ctx, `SELECT to_char((clock_timestamp() AT TIME ZONE time_zone)::date, 'YYYY-MM-DD') FROM app.users WHERE id = $1`, userID).Scan(&baseDate)
+		dateErr = tx.QueryRow(ctx, `SELECT to_char((clock_timestamp() AT TIME ZONE COALESCE(time_zone, 'UTC'))::date, 'YYYY-MM-DD') FROM app.users WHERE id = $1`, userID).Scan(&baseDate)
 	}
 	if dateErr != nil {
 		return nil, dateErr

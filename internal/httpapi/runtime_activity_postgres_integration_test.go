@@ -3,37 +3,32 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/auth"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/database"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestTaskActivityCreationAndUndoAsRuntimePostgreSQL(t *testing.T) {
-	runtimeURL := os.Getenv("RUNTIME_DATABASE_URL")
-	adminURL := os.Getenv("TEST_DATABASE_URL")
-	if runtimeURL == "" || adminURL == "" {
-		t.Skip("RUNTIME_DATABASE_URL and TEST_DATABASE_URL are required for runtime PostgreSQL verification")
-	}
-	for name, connectionString := range map[string]string{"RUNTIME_DATABASE_URL": runtimeURL, "TEST_DATABASE_URL": adminURL} {
-		parsed, err := url.Parse(connectionString)
-		if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-			t.Fatalf("%s must target loopback PostgreSQL", name)
-		}
+	adminURL, adminTarget := testdatabase.TestURL(t)
+	runtimeURL, runtimeTarget := testdatabase.URL(t, "RUNTIME_DATABASE_URL", "")
+	if !testdatabase.SameTarget(adminTarget, runtimeTarget) {
+		t.Fatal("RUNTIME_DATABASE_URL must identify the same dedicated test database as TEST_DATABASE_URL")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -65,25 +60,16 @@ func TestTaskActivityCreationAndUndoAsRuntimePostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialize runtime authentication service: %v", err)
 	}
-	registerKey := "register:ip:" + remoteIP
-	loginIPKey := "login:ip:" + remoteIP
-	accountDigest := sha256.Sum256([]byte(email))
-	loginEmailKey := "login:email:" + base64.RawURLEncoding.EncodeToString(accountDigest[:])
-	rateLimitHashes := [][]byte{rateLimitKeyHash(registerKey), rateLimitKeyHash(loginIPKey), rateLimitKeyHash(loginEmailKey)}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
 		if _, cleanupErr := adminPool.Exec(cleanupCtx, `DELETE FROM app.users WHERE email=$1`, email); cleanupErr != nil {
 			t.Errorf("clean up only the runtime integration account: %v", cleanupErr)
 		}
-		for _, keyHash := range rateLimitHashes {
-			if _, cleanupErr := adminPool.Exec(cleanupCtx, `DELETE FROM app.auth_rate_limits WHERE key_hash=$1`, keyHash); cleanupErr != nil {
-				t.Errorf("clean up only the runtime integration rate-limit key: %v", cleanupErr)
-			}
-		}
 	})
+	registerRateLimitTestCleanup(t, adminPool, []string{remoteIP}, []string{email})
 
-	if _, err := manager.Register(ctx, email, "Runtime integration password 9!", remoteIP); err != nil {
+	if _, err := manager.Register(ctx, "Runtime User", email, "Runtime integration password 9!", remoteIP); err != nil {
 		t.Fatalf("register fixture through runtime role: %v", err)
 	}
 	user, token, _, err := manager.Login(ctx, email, "Runtime integration password 9!", remoteIP)
@@ -141,10 +127,94 @@ func TestTaskActivityCreationAndUndoAsRuntimePostgreSQL(t *testing.T) {
 	if len(finalHistory) != 3 || finalHistory[0].EventType != "TASK_UNDONE" {
 		t.Fatalf("runtime Undo did not preserve original history and append its own event: %+v", finalHistory)
 	}
-	t.Log("runtime API create, task update, activity append, and Undo succeeded through todo_runtime")
+
+	templateRepo := repository.NewTemplateRepository(runtimePool)
+	template, err := templateRepo.CreateTemplate(ctx, user.ID, "Runtime cascade", "", []task.TemplateItem{{Title: "Tracked task", Priority: task.PriorityMedium}})
+	if err != nil {
+		t.Fatalf("runtime role could not create template fixture: %v", err)
+	}
+	createdFromTemplate, err := templateRepo.ApplyTemplate(ctx, user.ID, template.ID, template.Version, true)
+	if err != nil || len(createdFromTemplate) != 1 {
+		t.Fatalf("runtime role could not apply template and create application tracking rows: tasks=%d err=%v", len(createdFromTemplate), err)
+	}
+	var canSelectApplications, canInsertApplications, canUpdateApplications, canDeleteApplications, canTruncateApplications bool
+	var canSelectApplicationItems, canInsertApplicationItems, canUpdateApplicationItems, canDeleteApplicationItems, canTruncateApplicationItems bool
+	if err := runtimePool.QueryRow(ctx, `
+		SELECT has_table_privilege(current_user, 'app.task_template_applications', 'SELECT'),
+		       has_table_privilege(current_user, 'app.task_template_applications', 'INSERT'),
+		       (has_table_privilege(current_user, 'app.task_template_applications', 'UPDATE') OR has_any_column_privilege(current_user, 'app.task_template_applications', 'UPDATE')),
+		       has_table_privilege(current_user, 'app.task_template_applications', 'DELETE'),
+		       has_table_privilege(current_user, 'app.task_template_applications', 'TRUNCATE'),
+		       has_table_privilege(current_user, 'app.task_template_application_items', 'SELECT'),
+		       has_table_privilege(current_user, 'app.task_template_application_items', 'INSERT'),
+		       (has_table_privilege(current_user, 'app.task_template_application_items', 'UPDATE') OR has_any_column_privilege(current_user, 'app.task_template_application_items', 'UPDATE')),
+		       has_table_privilege(current_user, 'app.task_template_application_items', 'DELETE'),
+		       has_table_privilege(current_user, 'app.task_template_application_items', 'TRUNCATE')
+	`).Scan(&canSelectApplications, &canInsertApplications, &canUpdateApplications, &canDeleteApplications, &canTruncateApplications,
+		&canSelectApplicationItems, &canInsertApplicationItems, &canUpdateApplicationItems, &canDeleteApplicationItems, &canTruncateApplicationItems); err != nil {
+		t.Fatalf("inspect template application privileges: %v", err)
+	}
+	if !canSelectApplications || !canInsertApplications || canUpdateApplications || canDeleteApplications || canTruncateApplications ||
+		!canSelectApplicationItems || !canInsertApplicationItems || canUpdateApplicationItems || canDeleteApplicationItems || canTruncateApplicationItems {
+		t.Fatalf("unexpected template tracking privileges: applications SELECT/INSERT/UPDATE/DELETE/TRUNCATE=%t/%t/%t/%t/%t, items=%t/%t/%t/%t/%t",
+			canSelectApplications, canInsertApplications, canUpdateApplications, canDeleteApplications, canTruncateApplications,
+			canSelectApplicationItems, canInsertApplicationItems, canUpdateApplicationItems, canDeleteApplicationItems, canTruncateApplicationItems)
+	}
+
+	privilegeTx, err := runtimePool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin rollback-only direct tracking-write checks: %v", err)
+	}
+	for _, check := range []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{"application UPDATE", `UPDATE app.task_template_applications SET user_id=user_id WHERE template_id=$1`, []any{template.ID}},
+		{"application DELETE", `DELETE FROM app.task_template_applications WHERE template_id=$1`, []any{template.ID}},
+		{"application TRUNCATE", `TRUNCATE app.task_template_applications`, nil},
+		{"application item UPDATE", `UPDATE app.task_template_application_items SET user_id=user_id WHERE template_id=$1`, []any{template.ID}},
+		{"application item DELETE", `DELETE FROM app.task_template_application_items WHERE template_id=$1`, []any{template.ID}},
+		{"application item TRUNCATE", `TRUNCATE app.task_template_application_items`, nil},
+	} {
+		t.Run(check.name, func(t *testing.T) { assertRuntimePermissionDenied(t, ctx, privilegeTx, check.sql, check.args...) })
+	}
+	if err := privilegeTx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback direct tracking-write checks: %v", err)
+	}
+
+	if err := templateRepo.DeleteTemplate(ctx, user.ID, template.ID, template.Version); err != nil {
+		t.Fatalf("runtime role could not delete template with protected tracking-table cascades: %v", err)
+	}
+	var remainingApplications, remainingApplicationItems int
+	if err := runtimePool.QueryRow(ctx, `SELECT count(*) FROM app.task_template_applications WHERE template_id=$1`, template.ID).Scan(&remainingApplications); err != nil {
+		t.Fatalf("check application cascade result: %v", err)
+	}
+	if err := runtimePool.QueryRow(ctx, `SELECT count(*) FROM app.task_template_application_items WHERE template_id=$1`, template.ID).Scan(&remainingApplicationItems); err != nil {
+		t.Fatalf("check application-item cascade result: %v", err)
+	}
+	if remainingApplications != 0 || remainingApplicationItems != 0 {
+		t.Fatalf("template delete left tracking rows: applications=%d items=%d", remainingApplications, remainingApplicationItems)
+	}
+	t.Log("runtime API activity/Undo and template tracking INSERT/SELECT passed; direct tracking mutations were denied and parent-template FK cascades succeeded")
 }
 
-func rateLimitKeyHash(key string) []byte {
-	hash := sha256.Sum256([]byte(key))
-	return hash[:]
+func assertRuntimePermissionDenied(t *testing.T, ctx context.Context, tx pgx.Tx, statement string, args ...any) {
+	t.Helper()
+	const savepoint = "runtime_tracking_privilege_check"
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
+		t.Fatalf("create tracking privilege-check savepoint: %v", err)
+	}
+	_, operationErr := tx.Exec(ctx, statement, args...)
+	var pgError *pgconn.PgError
+	denied := errors.As(operationErr, &pgError) && pgError.Code == "42501"
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint); err != nil {
+		t.Fatalf("roll back tracking privilege-check statement: %v", err)
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
+		t.Fatalf("release tracking privilege-check savepoint: %v", err)
+	}
+	if !denied {
+		t.Fatalf("statement error = %v, want PostgreSQL permission denied (42501)", operationErr)
+	}
 }

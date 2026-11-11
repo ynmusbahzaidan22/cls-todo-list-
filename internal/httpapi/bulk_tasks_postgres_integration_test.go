@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +17,7 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 type bulkTaskWire struct {
@@ -26,14 +25,7 @@ type bulkTaskWire struct {
 }
 
 func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -51,6 +43,8 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 	}
 	base := "phase9-bulk-" + hex.EncodeToString(suffix[:])
 	emailA, emailB := base+"-a@example.test", base+"-b@example.test"
+	userAIP, userBIP := base+"-user-a", base+"-user-b"
+	loginAIP, loginBIP := base+"-login-a", base+"-login-b"
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -62,24 +56,26 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 			t.Errorf("Phase 9 account cleanup left %d accounts (query error: %v)", remaining, countErr)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{userAIP, userBIP, loginAIP, loginBIP}, []string{emailA, emailB})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatalf("initialize authentication manager: %v", err)
 	}
 	password := "phase nine integration password"
-	userA, err := manager.Register(ctx, emailA, password, "phase9-bulk-a")
+	userA, err := manager.Register(ctx, "Bulk User A", emailA, password, userAIP)
 	if err != nil {
 		t.Fatalf("register account A: %v", err)
 	}
-	if _, err := manager.Register(ctx, emailB, password, "phase9-bulk-b"); err != nil {
+	userB, err := manager.Register(ctx, "Bulk User B", emailB, password, userBIP)
+	if err != nil {
 		t.Fatalf("register account B: %v", err)
 	}
-	_, tokenA, _, err := manager.Login(ctx, emailA, password, "phase9-bulk-login-a")
+	_, tokenA, _, err := manager.Login(ctx, emailA, password, loginAIP)
 	if err != nil {
 		t.Fatalf("create account A session: %v", err)
 	}
-	_, tokenB, _, err := manager.Login(ctx, emailB, password, "phase9-bulk-login-b")
+	_, tokenB, _, err := manager.Login(ctx, emailB, password, loginBIP)
 	if err != nil {
 		t.Fatalf("create account B session: %v", err)
 	}
@@ -139,6 +135,36 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 	a := create(cookieA, base+" task A")
 	b := create(cookieA, base+" task B")
 	foreign := create(cookieB, base+" private task")
+	taskState := func(item taskWire, ownerID string) string {
+		t.Helper()
+		var state string
+		if err := pool.QueryRow(ctx, `SELECT to_jsonb(t)::text FROM app.tasks t WHERE id=$1 AND user_id=$2`, item.ID, ownerID).Scan(&state); err != nil {
+			t.Fatalf("read task %s state: %v", item.ID, err)
+		}
+		return state
+	}
+	activityState := func(item taskWire, ownerID string) string {
+		t.Helper()
+		var state string
+		if err := pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.created_at, a.id), '[]'::jsonb)::text FROM app.task_activity a WHERE task_id=$1 AND user_id=$2`, item.ID, ownerID).Scan(&state); err != nil {
+			t.Fatalf("read task %s activity state: %v", item.ID, err)
+		}
+		return state
+	}
+	assertTaskAndActivityUnchanged := func(operation string, item taskWire, ownerID, wantTaskState, wantActivityState string) {
+		t.Helper()
+		if got := taskState(item, ownerID); got != wantTaskState {
+			t.Errorf("task %s changed after rejected mixed-owner %s: got %s want %s", item.ID, operation, got, wantTaskState)
+		}
+		if got := activityState(item, ownerID); got != wantActivityState {
+			t.Errorf("task %s activity changed after rejected mixed-owner %s: got %s want %s", item.ID, operation, got, wantActivityState)
+		}
+	}
+	initialStates := map[string][2]string{
+		a.ID:       {taskState(a, userA.ID), activityState(a, userA.ID)},
+		b.ID:       {taskState(b, userA.ID), activityState(b, userA.ID)},
+		foreign.ID: {taskState(foreign, userB.ID), activityState(foreign, userB.ID)},
+	}
 
 	for name, body := range map[string]any{
 		"empty selection":   map[string]any{"action": "status", "status": task.StatusDone, "tasks": []any{}},
@@ -164,12 +190,22 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 	if mixed.Code != http.StatusNotFound {
 		t.Fatalf("mixed-owner bulk status=%d want=404 body=%s", mixed.Code, mixed.Body.String())
 	}
+	assertTaskAndActivityUnchanged("status update", a, userA.ID, initialStates[a.ID][0], initialStates[a.ID][1])
+	assertTaskAndActivityUnchanged("status update", b, userA.ID, initialStates[b.ID][0], initialStates[b.ID][1])
+	assertTaskAndActivityUnchanged("status update", foreign, userB.ID, initialStates[foreign.ID][0], initialStates[foreign.ID][1])
 	if got := read(cookieA, a); got.Version != a.Version || got.Status != task.StatusTODO {
 		t.Fatalf("mixed-owner request changed task A: %+v", got)
 	}
 	if activityCount(userA.ID, a.ID) != beforeA || activityCount(userA.ID, b.ID) != beforeB {
 		t.Fatal("mixed-owner request inserted activity despite rejection")
 	}
+	mixedDelete := request(cookieA, input("delete", "", a, foreign))
+	if mixedDelete.Code != http.StatusNotFound {
+		t.Fatalf("mixed-owner bulk delete status=%d want=404 body=%s", mixedDelete.Code, mixedDelete.Body.String())
+	}
+	assertTaskAndActivityUnchanged("delete", a, userA.ID, initialStates[a.ID][0], initialStates[a.ID][1])
+	assertTaskAndActivityUnchanged("delete", b, userA.ID, initialStates[b.ID][0], initialStates[b.ID][1])
+	assertTaskAndActivityUnchanged("delete", foreign, userB.ID, initialStates[foreign.ID][0], initialStates[foreign.ID][1])
 	if denied := sendTaskRequest(t, server, cookieB, http.MethodGet, "/api/tasks/"+a.ID, ""); denied.Code != http.StatusNotFound {
 		t.Fatalf("foreign task access status=%d want=404", denied.Code)
 	}
@@ -263,15 +299,12 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.task_id = '%s'::uuid AND NEW.event_type = 'TASK_STATUS_CHANGED' THEN RAISE EXCEPTION 'phase9 scoped activity failure'; END IF; RETURN NEW; END $body$`, functionName, d.ID)); err != nil {
 		t.Fatalf("create scoped test function: %v", err)
 	}
+	registerScopedFunctionCleanup(t, pool, functionName)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.task_activity FOR EACH ROW EXECUTE FUNCTION app.%s()`, triggerName, functionName)); err != nil {
-		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName))
 		t.Fatalf("create scoped test trigger: %v", err)
 	}
-	triggerRemoved := false
+	registerScopedTriggerCleanup(t, pool, "task_activity", triggerName)
 	removeTrigger := func() {
-		if triggerRemoved {
-			return
-		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
 		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.task_activity`, triggerName)); err != nil {
@@ -280,9 +313,7 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName)); err != nil {
 			t.Errorf("drop scoped Phase 9 function: %v", err)
 		}
-		triggerRemoved = true
 	}
-	t.Cleanup(removeTrigger)
 	beforeC, beforeD := activityCount(userA.ID, c.ID), activityCount(userA.ID, d.ID)
 	failed := request(cookieA, input("status", task.StatusDone, c, d))
 	if failed.Code != http.StatusInternalServerError {
@@ -310,15 +341,12 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.id = '%s'::uuid AND NEW.status = 'DONE' THEN RAISE EXCEPTION 'phase9 scoped task failure'; END IF; RETURN NEW; END $body$`, taskFunction, g.ID)); err != nil {
 		t.Fatalf("create scoped task failure function: %v", err)
 	}
+	registerScopedFunctionCleanup(t, pool, taskFunction)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE UPDATE OF status ON app.tasks FOR EACH ROW EXECUTE FUNCTION app.%s()`, taskTrigger, taskFunction)); err != nil {
-		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, taskFunction))
 		t.Fatalf("create scoped task failure trigger: %v", err)
 	}
-	taskTriggerRemoved := false
+	registerScopedTriggerCleanup(t, pool, "tasks", taskTrigger)
 	removeTaskTrigger := func() {
-		if taskTriggerRemoved {
-			return
-		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
 		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.tasks`, taskTrigger)); err != nil {
@@ -327,9 +355,7 @@ func TestBulkTaskOperationsPostgreSQL(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, taskFunction)); err != nil {
 			t.Errorf("drop scoped Phase 9 task function: %v", err)
 		}
-		taskTriggerRemoved = true
 	}
-	t.Cleanup(removeTaskTrigger)
 	beforeF, beforeG := activityCount(userA.ID, f.ID), activityCount(userA.ID, g.ID)
 	failedTaskWrite := request(cookieA, input("status", task.StatusDone, f, g))
 	if failedTaskWrite.Code != http.StatusInternalServerError {

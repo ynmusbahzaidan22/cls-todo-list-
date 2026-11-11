@@ -2,14 +2,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { expect, test } from "@playwright/test";
-import { getTestDatabaseURL } from "./test-database.js";
+import { getTestDatabaseURL, registerEmailRateLimitCleanup } from "./test-database.js";
 
 const testDatabaseURL = getTestDatabaseURL();
 test.describe.configure({ mode: "serial" });
 
 const baseURL = process.env.PHASE8_BASE_URL || "http://127.0.0.1:18080";
 const prefix = `phase15-priority-${randomUUID().replaceAll("-", "").slice(0, 18)}`;
-const account = { email: `${prefix}@example.test`, password: `Phase15-${randomUUID()}-${randomUUID()}` };
+const account = { name: "Priority User", email: `${prefix}@example.test`, password: `Phase15-${randomUUID()}-${randomUUID()}` };
+const testClientIP = registerEmailRateLimitCleanup(test, [account.email]);
+test.use({ extraHTTPHeaders: { "X-Forwarded-For": testClientIP } });
 let pool;
 
 function taskRow(page, title) {
@@ -40,7 +42,7 @@ async function addTask(page, title, priority) {
 test.beforeAll(async () => {
   const response = await fetch(`${baseURL}/api/auth/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Origin: baseURL },
+    headers: { "Content-Type": "application/json", Origin: baseURL, "X-Forwarded-For": testClientIP },
     body: JSON.stringify(account),
   });
   if (response.status !== 202) throw new Error(`Could not create isolated Phase 15 browser account (${response.status}).`);

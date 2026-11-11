@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -21,17 +19,11 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -56,16 +48,17 @@ func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
 			t.Errorf("clean up only the Undo integration accounts: %v", cleanupErr)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{prefix + "-ip-a", prefix + "-ip-b", prefix + "-login-a"}, []string{emailA, emailB})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatal(err)
 	}
-	userA, err := manager.Register(ctx, emailA, "undo integration password A", prefix+"-ip-a")
+	userA, err := manager.Register(ctx, "Undo User A", emailA, "undo integration password A", prefix+"-ip-a")
 	if err != nil {
 		t.Fatalf("register user A: %v", err)
 	}
-	userB, err := manager.Register(ctx, emailB, "undo integration password B", prefix+"-ip-b")
+	userB, err := manager.Register(ctx, "Undo User B", emailB, "undo integration password B", prefix+"-ip-b")
 	if err != nil {
 		t.Fatalf("register user B: %v", err)
 	}
@@ -217,19 +210,11 @@ func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.task_id = '%s'::uuid AND NEW.event_type = 'TASK_PRIORITY_CHANGED' THEN RAISE EXCEPTION 'phase15 scoped priority activity failure'; END IF; RETURN NEW; END $body$`, priorityFunctionName, rollbackPriorityTask.ID)); err != nil {
 		t.Fatalf("create priority rollback function: %v", err)
 	}
+	registerScopedFunctionCleanup(t, pool, priorityFunctionName)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.task_activity FOR EACH ROW EXECUTE FUNCTION app.%s()`, priorityTriggerName, priorityFunctionName)); err != nil {
 		t.Fatalf("create priority rollback trigger: %v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		if _, cleanupErr := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.task_activity`, priorityTriggerName)); cleanupErr != nil {
-			t.Errorf("drop priority rollback trigger: %v", cleanupErr)
-		}
-		if _, cleanupErr := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, priorityFunctionName)); cleanupErr != nil {
-			t.Errorf("drop priority rollback function: %v", cleanupErr)
-		}
-	})
+	registerScopedTriggerCleanup(t, pool, "task_activity", priorityTriggerName)
 	if _, err := taskService.Update(ctx, userA.ID, rollbackPriorityTask.ID, 1, rollbackPriorityTask.Title, rollbackPriorityTask.Description, rollbackPriorityTask.Status, task.PriorityHigh); !errors.Is(err, task.ErrStorage) {
 		t.Fatalf("priority event failure error=%v want storage failure", err)
 	}
@@ -326,6 +311,17 @@ func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
 		t.Fatalf("combined details Undo failed: task=%+v err=%v", updated, err)
 	}
 
+	dueTask := create(userA.ID, "Due date before", "")
+	dueUpdated, err := taskService.Update(ctx, userA.ID, dueTask.ID, 1, dueTask.Title, dueTask.Description, dueTask.Status, dueTask.Priority, "2027-04-05")
+	if err != nil || dueUpdated.DueDate == nil || *dueUpdated.DueDate != "2027-04-05" {
+		t.Fatalf("set due date for Undo: task=%+v err=%v", dueUpdated, err)
+	}
+	dueEvent := findEvent(userA.ID, dueTask.ID, "TASK_DUE_DATE_CHANGED")
+	dueUndone, _, err := taskService.Undo(ctx, userA.ID, dueTask.ID, dueEvent.ID, dueUpdated.Version)
+	if err != nil || dueUndone.DueDate != nil || dueUndone.Version != dueUpdated.Version+1 {
+		t.Fatalf("due-date Undo failed: task=%+v err=%v", dueUndone, err)
+	}
+
 	// Unsupported creation cannot be undone.
 	creationEvent := findEvent(userA.ID, fieldTask.ID, "TASK_CREATED")
 	if _, _, err := taskService.Undo(ctx, userA.ID, fieldTask.ID, creationEvent.ID, 6); !errors.Is(err, task.ErrUndoUnsupported) {
@@ -368,9 +364,45 @@ func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
 	// Cross-user event IDs are indistinguishable from missing resources; forged actor fields are rejected.
 	foreignTask := create(userB.ID, "Private event", "Private")
 	foreignEvent := findEvent(userB.ID, foreignTask.ID, "TASK_CREATED")
+	var foreignTaskState, foreignEventState, foreignActivityState string
+	if err := pool.QueryRow(ctx, `SELECT to_jsonb(t)::text FROM app.tasks t WHERE id=$1 AND user_id=$2`, foreignTask.ID, userB.ID).Scan(&foreignTaskState); err != nil {
+		t.Fatalf("capture user B task before rejected Undo: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_jsonb(a)::text FROM app.task_activity a WHERE id=$1 AND task_id=$2 AND user_id=$3`, foreignEvent.ID, foreignTask.ID, userB.ID).Scan(&foreignEventState); err != nil {
+		t.Fatalf("capture user B source event before rejected Undo: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.created_at, a.id), '[]'::jsonb)::text FROM app.task_activity a WHERE task_id=$1 AND user_id=$2`, foreignTask.ID, userB.ID).Scan(&foreignActivityState); err != nil {
+		t.Fatalf("capture user B history before rejected Undo: %v", err)
+	}
 	foreignPath := "/api/tasks/" + foreignTask.ID + "/activity/" + foreignEvent.ID + "/undo"
 	if response := sendTaskRequest(t, server, cookieA, http.MethodPost, foreignPath, `{"version":1}`); response.Code != http.StatusNotFound {
 		t.Fatalf("cross-user Undo response = %d, want 404", response.Code)
+	}
+	var gotForeignTaskState, gotForeignEventState, gotForeignActivityState string
+	if err := pool.QueryRow(ctx, `SELECT to_jsonb(t)::text FROM app.tasks t WHERE id=$1 AND user_id=$2`, foreignTask.ID, userB.ID).Scan(&gotForeignTaskState); err != nil {
+		t.Fatalf("reload user B task after rejected Undo: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_jsonb(a)::text FROM app.task_activity a WHERE id=$1 AND task_id=$2 AND user_id=$3`, foreignEvent.ID, foreignTask.ID, userB.ID).Scan(&gotForeignEventState); err != nil {
+		t.Fatalf("reload user B source event after rejected Undo: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.created_at, a.id), '[]'::jsonb)::text FROM app.task_activity a WHERE task_id=$1 AND user_id=$2`, foreignTask.ID, userB.ID).Scan(&gotForeignActivityState); err != nil {
+		t.Fatalf("reload user B history after rejected Undo: %v", err)
+	}
+	if gotForeignTaskState != foreignTaskState {
+		t.Errorf("user B task changed after user A's rejected Undo: got %s want %s", gotForeignTaskState, foreignTaskState)
+	}
+	if gotForeignEventState != foreignEventState {
+		t.Errorf("user B source activity changed after user A's rejected Undo: got %s want %s", gotForeignEventState, foreignEventState)
+	}
+	if gotForeignActivityState != foreignActivityState {
+		t.Errorf("user B activity history changed after user A's rejected Undo: got %s want %s", gotForeignActivityState, foreignActivityState)
+	}
+	var undoRelationshipCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM app.task_activity WHERE task_id=$1 AND user_id=$2 AND undo_of_event_id=$3`, foreignTask.ID, userB.ID, foreignEvent.ID).Scan(&undoRelationshipCount); err != nil {
+		t.Fatalf("check for foreign Undo relationship: %v", err)
+	}
+	if undoRelationshipCount != 0 {
+		t.Errorf("rejected cross-user Undo created %d Undo relationship(s), want 0", undoRelationshipCount)
 	}
 	ownTask := create(userA.ID, "Actor protection", "")
 	ownEvent := findEvent(userA.ID, ownTask.ID, "TASK_CREATED")
@@ -522,20 +554,11 @@ func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF OLD.id = '%s'::uuid AND NEW.title = 'Mutation A' THEN RAISE EXCEPTION 'forced Undo mutation failure'; END IF; RETURN NEW; END $body$`, mutationFunction, mutationFailureTask.ID)); err != nil {
 		t.Fatalf("create scoped task mutation failure function: %v", err)
 	}
+	registerScopedFunctionCleanup(t, pool, mutationFunction)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE UPDATE OF title ON app.tasks FOR EACH ROW EXECUTE FUNCTION app.%s()`, mutationTrigger, mutationFunction)); err != nil {
-		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, mutationFunction))
 		t.Fatalf("create scoped task mutation failure trigger: %v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		if _, cleanupErr := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.tasks`, mutationTrigger)); cleanupErr != nil {
-			t.Errorf("drop scoped task mutation failure trigger: %v", cleanupErr)
-		}
-		if _, cleanupErr := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, mutationFunction)); cleanupErr != nil {
-			t.Errorf("drop scoped task mutation failure function: %v", cleanupErr)
-		}
-	})
+	registerScopedTriggerCleanup(t, pool, "tasks", mutationTrigger)
 	if _, _, err := taskService.Undo(ctx, userA.ID, mutationFailureTask.ID, mutationFailureEvent.ID, 2); !errors.Is(err, task.ErrStorage) {
 		t.Fatalf("Undo with failing task mutation = %v, want storage error", err)
 	}
@@ -570,20 +593,11 @@ func TestTaskUndoSafetyAndHistoryPostgreSQL(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.undo_of_event_id IS NOT NULL THEN RAISE EXCEPTION 'forced Undo history failure'; END IF; RETURN NEW; END $body$`, functionName)); err != nil {
 		t.Fatalf("create scoped Undo failure function: %v", err)
 	}
+	registerScopedFunctionCleanup(t, pool, functionName)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.task_activity FOR EACH ROW EXECUTE FUNCTION app.%s()`, triggerName, functionName)); err != nil {
-		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName))
 		t.Fatalf("create scoped Undo failure trigger: %v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		if _, cleanupErr := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.task_activity`, triggerName)); cleanupErr != nil {
-			t.Errorf("drop scoped Undo failure trigger: %v", cleanupErr)
-		}
-		if _, cleanupErr := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName)); cleanupErr != nil {
-			t.Errorf("drop scoped Undo failure function: %v", cleanupErr)
-		}
-	})
+	registerScopedTriggerCleanup(t, pool, "task_activity", triggerName)
 	if _, _, err := taskService.Undo(ctx, userA.ID, rollbackTask.ID, rollbackEvent.ID, 2); !errors.Is(err, task.ErrStorage) {
 		t.Fatalf("Undo with failing event insert = %v, want storage error", err)
 	}

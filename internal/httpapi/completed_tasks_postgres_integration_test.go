@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 type completedPageWire struct {
@@ -29,14 +29,7 @@ type completedPageWire struct {
 }
 
 func TestCompletedTaskLifecycleOrderingAndArchivePostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -60,6 +53,9 @@ func TestCompletedTaskLifecycleOrderingAndArchivePostgreSQL(t *testing.T) {
 		Email:    "phase17-18-other-" + hex.EncodeToString(suffix[:]) + "@example.test",
 		Password: "phase 17 18 other integration password",
 	}
+	identity := hex.EncodeToString(suffix[:])
+	userIP, loginIP := "phase17-18-user-"+identity, "phase17-18-login-"+identity
+	otherUserIP, otherLoginIP := "phase17-18-other-user-"+identity, "phase17-18-other-login-"+identity
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -67,24 +63,25 @@ func TestCompletedTaskLifecycleOrderingAndArchivePostgreSQL(t *testing.T) {
 			t.Errorf("clean up only the isolated lifecycle accounts: %v", cleanupErr)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{userIP, loginIP, otherUserIP, otherLoginIP}, []string{account.Email, otherAccount.Email})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatalf("initialize auth manager: %v", err)
 	}
-	user, err := manager.Register(ctx, account.Email, account.Password, "phase17-18-user")
+	user, err := manager.Register(ctx, "Phase 17-18 User", account.Email, account.Password, userIP)
 	if err != nil {
 		t.Fatalf("register isolated account: %v", err)
 	}
-	_, token, _, err := manager.Login(ctx, account.Email, account.Password, "phase17-18-login")
+	_, token, _, err := manager.Login(ctx, account.Email, account.Password, loginIP)
 	if err != nil {
 		t.Fatalf("create isolated session: %v", err)
 	}
 	cookie := &http.Cookie{Name: "todo_session", Value: token}
-	if _, err := manager.Register(ctx, otherAccount.Email, otherAccount.Password, "phase17-18-other-user"); err != nil {
+	if _, err := manager.Register(ctx, "Other User", otherAccount.Email, otherAccount.Password, otherUserIP); err != nil {
 		t.Fatalf("register second isolated account: %v", err)
 	}
-	_, otherToken, _, err := manager.Login(ctx, otherAccount.Email, otherAccount.Password, "phase17-18-other-login")
+	_, otherToken, _, err := manager.Login(ctx, otherAccount.Email, otherAccount.Password, otherLoginIP)
 	if err != nil {
 		t.Fatalf("create second isolated session: %v", err)
 	}

@@ -27,6 +27,7 @@ type response struct {
 type RouterOptions struct {
 	Auth              *AuthHandlers
 	Tasks             *TaskHandlers
+	Admin             *AdminHandlers
 	Templates         *TemplateHandlers
 	Preferences       *PreferenceHandlers
 	TrustedOrigin     string
@@ -63,6 +64,14 @@ func NewRouter(checker readinessChecker, logger *slog.Logger, frontendDir string
 			preferences := options[0].Preferences
 			mux.Handle("GET /api/preferences", handlers.requireAuthentication(http.HandlerFunc(preferences.get)))
 			mux.Handle("PUT /api/preferences", handlers.requireAuthentication(http.HandlerFunc(preferences.update)))
+		}
+		if options[0].Admin != nil {
+			admin := options[0].Admin
+			mux.Handle("GET /api/admin/users", handlers.requireAuthentication(handlers.requireAdmin(http.HandlerFunc(admin.listUsers))))
+			mux.Handle("GET /api/admin/tasks", handlers.requireAuthentication(handlers.requireAdmin(http.HandlerFunc(admin.listTasks))))
+			mux.Handle("PATCH /api/admin/users/{userID}/role", handlers.requireAuthentication(handlers.requireAdmin(http.HandlerFunc(admin.changeUserRole))))
+			mux.Handle("PATCH /api/admin/users/{userID}/status", handlers.requireAuthentication(handlers.requireAdmin(http.HandlerFunc(admin.changeUserStatus))))
+			mux.Handle("POST /api/admin/users/{userID}/sessions/revoke", handlers.requireAuthentication(handlers.requireAdmin(http.HandlerFunc(admin.revokeUserSessions))))
 		}
 		if options[0].Tasks != nil {
 			tasks := options[0].Tasks

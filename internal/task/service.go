@@ -40,15 +40,23 @@ type listContextProvider interface {
 }
 
 type deletedCursorPayload struct {
-	DeletedAt time.Time `json:"deleted_at"`
-	ID        string    `json:"id"`
-	Cutoff    time.Time `json:"cutoff"`
-	OwnerID   string    `json:"owner_id"`
+	Resource   string    `json:"resource"`
+	DeletedAt  time.Time `json:"deleted_at"`
+	ID         string    `json:"id"`
+	Cutoff     time.Time `json:"cutoff"`
+	SnapshotAt time.Time `json:"snapshot_at"`
+	OwnerID    string    `json:"owner_id"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type activityCursorPayload struct {
-	CreatedAt time.Time `json:"created_at"`
-	ID        string    `json:"id"`
+	Resource   string    `json:"resource"`
+	CreatedAt  time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	SnapshotAt time.Time `json:"snapshot_at"`
+	OwnerID    string    `json:"owner_id"`
+	TaskID     string    `json:"task_id"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 func NewService(repository Repository, cursorSigningKey ...[]byte) *Service {
@@ -197,7 +205,7 @@ func (s *Service) ListDeleted(ctx context.Context, userID string, limit int, raw
 	}
 	var cursor *DeletedCursor
 	if rawCursor != "" {
-		decoded, err := decodeDeletedCursor(rawCursor)
+		decoded, err := decodeDeletedCursor(rawCursor, s.cursorSignKey)
 		if err != nil || !strings.EqualFold(decoded.OwnerID, userID) {
 			return Page{}, ErrInvalidInput
 		}
@@ -214,9 +222,11 @@ func (s *Service) ListDeleted(ctx context.Context, userID string, limit int, raw
 		if last.DeletedAt == nil || cutoff.IsZero() {
 			return Page{}, fmt.Errorf("deleted task listing returned invalid cursor fields: %w", ErrStorage)
 		}
+		snapshotAt := cutoff.Add(24 * time.Hour)
 		next, err := encodeDeletedCursor(DeletedCursor{
-			DeletedAt: *last.DeletedAt, ID: last.ID, Cutoff: cutoff, OwnerID: userID,
-		})
+			DeletedAt: *last.DeletedAt, ID: last.ID, Cutoff: cutoff, SnapshotAt: snapshotAt, OwnerID: userID,
+			ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
+		}, s.cursorSignKey)
 		if err != nil {
 			return Page{}, fmt.Errorf("encode deleted task cursor: %w", ErrStorage)
 		}
@@ -335,7 +345,7 @@ func (s *Service) Activity(ctx context.Context, userID, taskID string, limit int
 	}
 	var cursor *ActivityCursor
 	if rawCursor != "" {
-		decoded, err := decodeActivityCursor(rawCursor)
+		decoded, err := decodeActivityCursor(rawCursor, s.cursorSignKey, userID, taskID)
 		if err != nil {
 			return ActivityPage{}, ErrInvalidInput
 		}
@@ -352,11 +362,13 @@ func (s *Service) Activity(ctx context.Context, userID, taskID string, limit int
 	if len(items) > limit {
 		page.Items = items[:limit]
 		last := page.Items[len(page.Items)-1]
-		payload, err := json.Marshal(activityCursorPayload{CreatedAt: last.CreatedAt.UTC(), ID: last.ID})
+		encoded, err := encodeActivityCursor(ActivityCursor{
+			CreatedAt: last.CreatedAt, ID: last.ID, SnapshotAt: last.SnapshotAt,
+			OwnerID: userID, TaskID: taskID, ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
+		}, s.cursorSignKey)
 		if err != nil {
 			return ActivityPage{}, fmt.Errorf("encode activity cursor: %w", ErrStorage)
 		}
-		encoded := base64.RawURLEncoding.EncodeToString(payload)
 		page.NextCursor = &encoded
 	}
 	if page.Items == nil {
@@ -377,12 +389,43 @@ func (s *Service) Undo(ctx context.Context, userID, taskID, eventID string, vers
 	return updated, event, nil
 }
 
-func decodeActivityCursor(raw string) (ActivityCursor, error) {
-	if len(raw) == 0 || len(raw) > maxCursorLength {
+func encodeActivityCursor(cursor ActivityCursor, signingKey []byte) (string, error) {
+	if len(signingKey) != 32 || !ValidID(cursor.OwnerID) || !ValidID(cursor.TaskID) || !ValidID(cursor.ID) ||
+		cursor.CreatedAt.IsZero() || cursor.SnapshotAt.IsZero() || cursor.CreatedAt.After(cursor.SnapshotAt) || cursor.ExpiresAt.IsZero() {
+		return "", ErrInvalidInput
+	}
+	payload, err := json.Marshal(activityCursorPayload{
+		Resource: "activity", CreatedAt: cursor.CreatedAt.UTC(), ID: strings.ToLower(cursor.ID), SnapshotAt: cursor.SnapshotAt.UTC(),
+		OwnerID: strings.ToLower(cursor.OwnerID), TaskID: strings.ToLower(cursor.TaskID), ExpiresAt: cursor.ExpiresAt.UTC(),
+	})
+	if err != nil {
+		return "", err
+	}
+	body := base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, signingKey)
+	_, _ = mac.Write([]byte(body))
+	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func decodeActivityCursor(raw string, signingKey []byte, ownerID, taskID string) (ActivityCursor, error) {
+	if len(raw) == 0 || len(raw) > maxCursorLength || len(signingKey) != 32 || !ValidID(ownerID) || !ValidID(taskID) {
 		return ActivityCursor{}, ErrInvalidInput
 	}
-	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 2 {
+		return ActivityCursor{}, ErrInvalidInput
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || base64.RawURLEncoding.EncodeToString(signature) != parts[1] {
+		return ActivityCursor{}, ErrInvalidInput
+	}
+	mac := hmac.New(sha256.New, signingKey)
+	_, _ = mac.Write([]byte(parts[0]))
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return ActivityCursor{}, ErrInvalidInput
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || base64.RawURLEncoding.EncodeToString(data) != parts[0] {
 		return ActivityCursor{}, ErrInvalidInput
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -394,10 +437,15 @@ func decodeActivityCursor(raw string) (ActivityCursor, error) {
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return ActivityCursor{}, ErrInvalidInput
 	}
-	if payload.CreatedAt.IsZero() || !ValidID(payload.ID) {
+	if payload.Resource != "activity" || payload.CreatedAt.IsZero() || payload.SnapshotAt.IsZero() || payload.CreatedAt.After(payload.SnapshotAt) ||
+		!ValidID(payload.ID) || !strings.EqualFold(payload.OwnerID, ownerID) || !strings.EqualFold(payload.TaskID, taskID) ||
+		payload.ExpiresAt.IsZero() || time.Now().UTC().After(payload.ExpiresAt) {
 		return ActivityCursor{}, ErrInvalidInput
 	}
-	return ActivityCursor{CreatedAt: payload.CreatedAt.UTC(), ID: strings.ToLower(payload.ID)}, nil
+	return ActivityCursor{
+		CreatedAt: payload.CreatedAt.UTC(), ID: strings.ToLower(payload.ID), SnapshotAt: payload.SnapshotAt.UTC(),
+		OwnerID: strings.ToLower(payload.OwnerID), TaskID: strings.ToLower(payload.TaskID), ExpiresAt: payload.ExpiresAt.UTC(),
+	}, nil
 }
 
 func mapRepositoryError(operation string, err error) error {
@@ -615,22 +663,43 @@ func taskStatusRank(status string) int {
 	}
 }
 
-func encodeDeletedCursor(cursor DeletedCursor) (string, error) {
+func encodeDeletedCursor(cursor DeletedCursor, signingKey []byte) (string, error) {
+	if len(signingKey) != 32 || !ValidID(cursor.ID) || !ValidID(cursor.OwnerID) || cursor.DeletedAt.IsZero() || cursor.Cutoff.IsZero() ||
+		cursor.SnapshotAt.IsZero() || cursor.SnapshotAt.Sub(cursor.Cutoff) != 24*time.Hour || cursor.Cutoff.After(cursor.DeletedAt) || cursor.ExpiresAt.IsZero() {
+		return "", ErrInvalidInput
+	}
 	encoded, err := json.Marshal(deletedCursorPayload{
-		DeletedAt: cursor.DeletedAt.UTC(), ID: cursor.ID, Cutoff: cursor.Cutoff.UTC(), OwnerID: cursor.OwnerID,
+		Resource: "deleted", DeletedAt: cursor.DeletedAt.UTC(), ID: strings.ToLower(cursor.ID), Cutoff: cursor.Cutoff.UTC(),
+		SnapshotAt: cursor.SnapshotAt.UTC(), OwnerID: strings.ToLower(cursor.OwnerID), ExpiresAt: cursor.ExpiresAt.UTC(),
 	})
 	if err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(encoded), nil
+	body := base64.RawURLEncoding.EncodeToString(encoded)
+	mac := hmac.New(sha256.New, signingKey)
+	_, _ = mac.Write([]byte(body))
+	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func decodeDeletedCursor(raw string) (DeletedCursor, error) {
-	if len(raw) == 0 || len(raw) > maxCursorLength {
+func decodeDeletedCursor(raw string, signingKey []byte) (DeletedCursor, error) {
+	if len(raw) == 0 || len(raw) > maxCursorLength || len(signingKey) != 32 {
 		return DeletedCursor{}, ErrInvalidInput
 	}
-	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 2 {
+		return DeletedCursor{}, ErrInvalidInput
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || base64.RawURLEncoding.EncodeToString(signature) != parts[1] {
+		return DeletedCursor{}, ErrInvalidInput
+	}
+	mac := hmac.New(sha256.New, signingKey)
+	_, _ = mac.Write([]byte(parts[0]))
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return DeletedCursor{}, ErrInvalidInput
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || base64.RawURLEncoding.EncodeToString(data) != parts[0] {
 		return DeletedCursor{}, ErrInvalidInput
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -642,11 +711,13 @@ func decodeDeletedCursor(raw string) (DeletedCursor, error) {
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return DeletedCursor{}, ErrInvalidInput
 	}
-	if payload.DeletedAt.IsZero() || payload.Cutoff.IsZero() || !ValidID(payload.ID) || !ValidID(payload.OwnerID) || payload.Cutoff.After(payload.DeletedAt) {
+	if payload.Resource != "deleted" || payload.DeletedAt.IsZero() || payload.Cutoff.IsZero() || payload.SnapshotAt.IsZero() ||
+		payload.SnapshotAt.Sub(payload.Cutoff) != 24*time.Hour || !ValidID(payload.ID) || !ValidID(payload.OwnerID) || payload.Cutoff.After(payload.DeletedAt) ||
+		payload.ExpiresAt.IsZero() || time.Now().UTC().After(payload.ExpiresAt) {
 		return DeletedCursor{}, ErrInvalidInput
 	}
 	return DeletedCursor{
 		DeletedAt: payload.DeletedAt.UTC(), ID: strings.ToLower(payload.ID),
-		Cutoff: payload.Cutoff.UTC(), OwnerID: strings.ToLower(payload.OwnerID),
+		Cutoff: payload.Cutoff.UTC(), SnapshotAt: payload.SnapshotAt.UTC(), OwnerID: strings.ToLower(payload.OwnerID), ExpiresAt: payload.ExpiresAt.UTC(),
 	}, nil
 }

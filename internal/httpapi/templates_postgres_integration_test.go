@@ -9,8 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -21,17 +19,11 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestTaskTemplatesPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target loopback PostgreSQL")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test database: %v", err)
@@ -55,16 +47,17 @@ func TestTaskTemplatesPostgreSQL(t *testing.T) {
 			t.Errorf("remove isolated template test users: %v", err)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{marker + "-a", marker + "-b", marker + "-login-a", marker + "-login-b"}, emails)
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatal(err)
 	}
 	password := "Phase ten integration password!"
-	userA, err := manager.Register(ctx, emails[0], password, marker+"-a")
+	userA, err := manager.Register(ctx, "Template User A", emails[0], password, marker+"-a")
 	if err != nil {
 		t.Fatalf("register owner: %v", err)
 	}
-	userB, err := manager.Register(ctx, emails[1], password, marker+"-b")
+	userB, err := manager.Register(ctx, "Template User B", emails[1], password, marker+"-b")
 	if err != nil {
 		t.Fatalf("register second owner: %v", err)
 	}
@@ -104,6 +97,29 @@ func TestTaskTemplatesPostgreSQL(t *testing.T) {
 		t.Fatal("database accepted unsupported template-item priority")
 	}
 	path := "/api/task-templates/" + template.ID
+	templateState := func() string {
+		t.Helper()
+		var state string
+		err := pool.QueryRow(ctx, `
+			SELECT jsonb_build_object(
+				'template', (SELECT to_jsonb(t) FROM app.task_templates t WHERE t.id=$1 AND t.user_id=$2),
+				'items', (SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.position, i.id), '[]'::jsonb) FROM app.task_template_items i WHERE i.template_id=$1 AND i.user_id=$2),
+				'applications', (SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.created_at, a.id), '[]'::jsonb) FROM app.task_template_applications a WHERE a.template_id=$1 AND a.user_id=$2),
+				'application_items', (SELECT COALESCE(jsonb_agg(to_jsonb(ai) ORDER BY ai.application_id, ai.template_item_id), '[]'::jsonb) FROM app.task_template_application_items ai WHERE ai.template_id=$1 AND ai.user_id=$2),
+				'generated_tasks', (SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM app.task_template_application_items ai JOIN app.tasks t ON t.id=ai.task_id AND t.user_id=ai.user_id WHERE ai.template_id=$1 AND ai.user_id=$2)
+			)::text`, template.ID, userA.ID).Scan(&state)
+		if err != nil {
+			t.Fatalf("read owner template and application state: %v", err)
+		}
+		return state
+	}
+	assertTemplateUnchanged := func(operation, want string) {
+		t.Helper()
+		if got := templateState(); got != want {
+			t.Errorf("owner template state changed after rejected cross-user %s: got %s want %s", operation, got, want)
+		}
+	}
+	ownerTemplateState := templateState()
 	for _, invalidBody := range []string{`{"name":"empty","items":[]}`, `{"name":"duplicate","items":[{"title":"same"},{"title":" SAME "}]}`, fmt.Sprintf(`{"name":"too many","items":%s}`, repeatedItemsJSON(task.MaxTemplateItems+1))} {
 		result := request(cookieA, http.MethodPost, "/api/task-templates", invalidBody)
 		if result.Code != http.StatusUnprocessableEntity {
@@ -116,12 +132,15 @@ func TestTaskTemplatesPostgreSQL(t *testing.T) {
 	if got := request(cookieB, http.MethodPut, path, fmt.Sprintf(`{"name":"forged","version":1,"items":[{"title":"x"}]}`)).Code; got != http.StatusNotFound {
 		t.Fatalf("foreign template update status=%d", got)
 	}
+	assertTemplateUnchanged("update", ownerTemplateState)
 	if got := request(cookieB, http.MethodDelete, path, `{"version":1}`).Code; got != http.StatusNotFound {
 		t.Fatalf("foreign template delete status=%d", got)
 	}
+	assertTemplateUnchanged("delete", ownerTemplateState)
 	if got := request(cookieB, http.MethodPost, path+"/apply", `{"version":1}`).Code; got != http.StatusNotFound {
 		t.Fatalf("foreign template apply status=%d", got)
 	}
+	assertTemplateUnchanged("apply", ownerTemplateState)
 	list := request(cookieA, http.MethodGet, "/api/task-templates", "")
 	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), template.ID) {
 		t.Fatalf("owner template listing status=%d body=%s", list.Code, list.Body.String())
@@ -310,12 +329,20 @@ func TestTaskTemplatesPostgreSQL(t *testing.T) {
 		if strings.Contains(failOn, "task fail") {
 			_, err = pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.title = %q THEN RAISE EXCEPTION 'injected template task failure'; END IF; RETURN NEW; END $body$`, function, failOn))
 			if err == nil {
+				registerScopedFunctionCleanup(t, pool, function)
 				_, err = pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.tasks FOR EACH ROW EXECUTE FUNCTION app.%s()`, trigger, function))
+				if err == nil {
+					registerScopedTriggerCleanup(t, pool, "tasks", trigger)
+				}
 			}
 		} else {
 			_, err = pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.event_type = 'TASK_CREATED' AND NEW.new_value->>'title' = %q THEN RAISE EXCEPTION 'injected template activity failure'; END IF; RETURN NEW; END $body$`, function, failOn))
 			if err == nil {
+				registerScopedFunctionCleanup(t, pool, function)
 				_, err = pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.task_activity FOR EACH ROW EXECUTE FUNCTION app.%s()`, trigger, function))
+				if err == nil {
+					registerScopedTriggerCleanup(t, pool, "task_activity", trigger)
+				}
 			}
 		}
 		if err != nil {

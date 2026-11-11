@@ -194,25 +194,89 @@ func TestListDeletedUsesOwnerBoundCursorAndPageLimit(t *testing.T) {
 		},
 		deletedCutoff: cutoff,
 	}
-	page, err := NewService(repository).ListDeleted(context.Background(), owner, 1, "")
+	key := bytes.Repeat([]byte{9}, 32)
+	service := NewService(repository, key)
+	page, err := service.ListDeleted(context.Background(), owner, 1, "")
 	if err != nil {
 		t.Fatalf("ListDeleted returned error: %v", err)
 	}
 	if len(page.Items) != 1 || page.NextCursor == nil || repository.deletedLimit != 2 {
 		t.Fatalf("ListDeleted page/limit = %d/%v/%d, want one item, cursor, limit 2", len(page.Items), page.NextCursor, repository.deletedLimit)
 	}
-	cursor, err := decodeDeletedCursor(*page.NextCursor)
+	cursor, err := decodeDeletedCursor(*page.NextCursor, key)
 	if err != nil {
 		t.Fatalf("decode generated deleted cursor: %v", err)
 	}
-	if cursor.OwnerID != owner || cursor.Cutoff != cutoff || cursor.ID != page.Items[0].ID {
+	if cursor.OwnerID != owner || cursor.Cutoff != cutoff || !cursor.SnapshotAt.Equal(cutoff.Add(24*time.Hour)) || cursor.ID != page.Items[0].ID {
 		t.Fatalf("cursor does not pin owner/cutoff/last item: %+v", cursor)
 	}
-	if _, err := NewService(repository).ListDeleted(context.Background(), "22222222-2222-4222-8222-222222222222", 1, *page.NextCursor); err != ErrInvalidInput {
+	if _, err := service.ListDeleted(context.Background(), "22222222-2222-4222-8222-222222222222", 1, *page.NextCursor); err != ErrInvalidInput {
 		t.Fatalf("cross-owner cursor error = %v, want ErrInvalidInput", err)
 	}
 	if _, err := NewService(repository).ListDeleted(context.Background(), owner, 1, "not-a-cursor"); err != ErrInvalidInput {
 		t.Fatalf("malformed cursor error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestDeletedAndActivityCursorsAreSignedBoundAndExpire(t *testing.T) {
+	key := bytes.Repeat([]byte{4}, 32)
+	owner := "11111111-1111-4111-8111-111111111111"
+	taskID := "22222222-2222-4222-8222-222222222222"
+	id := "33333333-3333-4333-8333-333333333333"
+	now := time.Now().UTC()
+	cutoff := now.Add(-time.Hour)
+	deleted, err := encodeDeletedCursor(DeletedCursor{
+		DeletedAt: cutoff.Add(time.Minute), ID: id, Cutoff: cutoff, SnapshotAt: cutoff.Add(24 * time.Hour),
+		OwnerID: owner, ExpiresAt: now.Add(time.Minute),
+	}, key)
+	if err != nil {
+		t.Fatalf("encode deleted cursor: %v", err)
+	}
+	decodedDeleted, err := decodeDeletedCursor(deleted, key)
+	if err != nil || decodedDeleted.OwnerID != owner || decodedDeleted.ID != id || !decodedDeleted.SnapshotAt.Equal(cutoff.Add(24*time.Hour)) {
+		t.Fatalf("decode deleted cursor=%+v err=%v", decodedDeleted, err)
+	}
+	if _, err := decodeDeletedCursor(deleted+"x", key); err != ErrInvalidInput {
+		t.Fatalf("tampered deleted cursor error=%v; want invalid input", err)
+	}
+	expiredDeleted, err := encodeDeletedCursor(DeletedCursor{
+		DeletedAt: cutoff.Add(time.Minute), ID: id, Cutoff: cutoff, SnapshotAt: cutoff.Add(24 * time.Hour),
+		OwnerID: owner, ExpiresAt: now.Add(-time.Second),
+	}, key)
+	if err != nil {
+		t.Fatalf("encode expired deleted cursor: %v", err)
+	}
+	if _, err := decodeDeletedCursor(expiredDeleted, key); err != ErrInvalidInput {
+		t.Fatalf("expired deleted cursor error=%v; want invalid input", err)
+	}
+
+	activity, err := encodeActivityCursor(ActivityCursor{
+		CreatedAt: now.Add(-time.Second), ID: id, SnapshotAt: now, OwnerID: owner, TaskID: taskID, ExpiresAt: now.Add(time.Minute),
+	}, key)
+	if err != nil {
+		t.Fatalf("encode activity cursor: %v", err)
+	}
+	decodedActivity, err := decodeActivityCursor(activity, key, owner, taskID)
+	if err != nil || decodedActivity.ID != id || decodedActivity.OwnerID != owner || decodedActivity.TaskID != taskID {
+		t.Fatalf("decode activity cursor=%+v err=%v", decodedActivity, err)
+	}
+	if _, err := decodeActivityCursor(activity, key, "44444444-4444-4444-8444-444444444444", taskID); err != ErrInvalidInput {
+		t.Fatalf("cross-owner activity cursor error=%v; want invalid input", err)
+	}
+	if _, err := decodeActivityCursor(activity, key, owner, "55555555-5555-4555-8555-555555555555"); err != ErrInvalidInput {
+		t.Fatalf("cross-task activity cursor error=%v; want invalid input", err)
+	}
+	if _, err := decodeActivityCursor(activity+"x", key, owner, taskID); err != ErrInvalidInput {
+		t.Fatalf("tampered activity cursor error=%v; want invalid input", err)
+	}
+	expired, err := encodeActivityCursor(ActivityCursor{
+		CreatedAt: now.Add(-time.Second), ID: id, SnapshotAt: now, OwnerID: owner, TaskID: taskID, ExpiresAt: now.Add(-time.Second),
+	}, key)
+	if err != nil {
+		t.Fatalf("encode expired activity cursor: %v", err)
+	}
+	if _, err := decodeActivityCursor(expired, key, owner, taskID); err != ErrInvalidInput {
+		t.Fatalf("expired activity cursor error=%v; want invalid input", err)
 	}
 }
 

@@ -7,9 +7,37 @@
 /node_modules/
 /playwright-report/
 /test-results/
+/blob-report/
+/playwright/.cache/
 
 # Go build and test artifacts.
 /todo-api.exe
 /todo-api
+*.exe
 *.test
 coverage.out
+*.cover
+*.prof
+
+# Local diagnostics, database backups, evidence, and temporary exports.
+*.log
+*.tmp
+*.dump
+*.backup
+*.bak
+*.sql.gz
+/.cache/
+/tmp/
+/.evidence/
+/evidence/
+
+# Local certificates, credentials, and editor/OS state.
+*.pem
+*.key
+*.p12
+*.pfx
+/.credentials/
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db

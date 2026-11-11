@@ -18,7 +18,9 @@ var (
 
 type User struct {
 	ID        string
+	Name      string
 	Email     string
+	Role      string
 	CreatedAt time.Time
 }
 
@@ -29,7 +31,7 @@ type Account struct {
 }
 
 type Repository interface {
-	CreateAccount(context.Context, string, string) (User, error)
+	CreateAccount(context.Context, string, string, string) (User, error)
 	AllowRateLimit(context.Context, string, int, time.Duration) (bool, error)
 	FindAccountByEmail(context.Context, string) (Account, error)
 	CreateSession(context.Context, []byte, string, time.Time, time.Time, time.Time) error
@@ -38,7 +40,7 @@ type Repository interface {
 }
 
 type Service interface {
-	Register(context.Context, string, string, string) (User, error)
+	Register(context.Context, string, string, string, string) (User, error)
 	Login(context.Context, string, string, string) (User, string, time.Time, error)
 	Authenticate(context.Context, string) (User, error)
 	Logout(context.Context, string) error

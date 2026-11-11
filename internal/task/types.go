@@ -85,10 +85,12 @@ type ListFilter struct {
 // DeletedCursor pins the recovery cutoff for all pages in one listing and
 // keeps keyset ordering stable while the 24-hour window advances.
 type DeletedCursor struct {
-	DeletedAt time.Time
-	ID        string
-	Cutoff    time.Time
-	OwnerID   string
+	DeletedAt  time.Time
+	ID         string
+	Cutoff     time.Time
+	SnapshotAt time.Time
+	OwnerID    string
+	ExpiresAt  time.Time
 }
 
 type Page struct {
@@ -109,11 +111,16 @@ type Activity struct {
 	UndoAvailable         bool            `json:"undo_available"`
 	UndoUnavailableReason string          `json:"undo_unavailable_reason,omitempty"`
 	UndoVersion           int64           `json:"undo_version,omitempty"`
+	SnapshotAt            time.Time       `json:"-"`
 }
 
 type ActivityCursor struct {
-	CreatedAt time.Time
-	ID        string
+	CreatedAt  time.Time
+	ID         string
+	SnapshotAt time.Time
+	OwnerID    string
+	TaskID     string
+	ExpiresAt  time.Time
 }
 
 type ActivityPage struct {

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,17 +19,11 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestDeletedTaskListingPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -55,17 +48,18 @@ func TestDeletedTaskListingPostgreSQL(t *testing.T) {
 			t.Errorf("clean up only the deleted-list integration accounts: %v", cleanupErr)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{prefix + "-ip-a", prefix + "-ip-b", prefix + "-login-a", prefix + "-login-b"}, []string{emailA, emailB})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatal(err)
 	}
 	password := "deleted-list integration password"
-	userA, err := manager.Register(ctx, emailA, password, prefix+"-ip-a")
+	userA, err := manager.Register(ctx, "Deleted User A", emailA, password, prefix+"-ip-a")
 	if err != nil {
 		t.Fatalf("register user A: %v", err)
 	}
-	if _, err := manager.Register(ctx, emailB, password, prefix+"-ip-b"); err != nil {
+	if _, err := manager.Register(ctx, "Deleted User B", emailB, password, prefix+"-ip-b"); err != nil {
 		t.Fatalf("register user B: %v", err)
 	}
 	_, tokenA, _, err := manager.Login(ctx, emailA, password, prefix+"-login-a")

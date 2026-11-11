@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,9 @@ import (
 
 const defaultHTTPAddr = "127.0.0.1:8080"
 const defaultDatabaseMaxConns = 10
+const playwrightTestModeEnv = "PLAYWRIGHT_TEST_MODE"
+
+var testSSLMode = regexp.MustCompile(`^sslmode=(disable|allow|prefer|require|verify-ca|verify-full)$`)
 
 // Config contains only runtime settings that affect this server process.
 type Config struct {
@@ -27,6 +31,7 @@ type Config struct {
 	TaskCursorSigningKey []byte
 	SessionCookieSecure  bool
 	TrustedProxyCIDRs    []string
+	PlaywrightTestMode   bool
 }
 
 // Load reads and validates process environment configuration.
@@ -54,6 +59,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 
 	databaseURL := strings.TrimSpace(valueOr(lookup, "DATABASE_URL", ""))
 	if err := validateDatabaseURL(databaseURL); err != nil {
+		return Config{}, err
+	}
+	playwrightTestMode, err := validatePlaywrightTestMode(lookup, appEnv, databaseURL)
+	if err != nil {
 		return Config{}, err
 	}
 
@@ -128,7 +137,59 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		TaskCursorSigningKey: cursorKey,
 		SessionCookieSecure:  secureCookie,
 		TrustedProxyCIDRs:    proxyCIDRs,
+		PlaywrightTestMode:   playwrightTestMode,
 	}, nil
+}
+
+// validatePlaywrightTestMode permits disabling background maintenance only for
+// the explicitly marked local E2E process connected to the isolated test DB.
+func validatePlaywrightTestMode(lookup func(string) (string, bool), appEnv, databaseURL string) (bool, error) {
+	value, present := lookup(playwrightTestModeEnv)
+	if !present || value == "" {
+		return false, nil
+	}
+	if value != "1" {
+		return false, fmt.Errorf("%s must be unset or exactly 1", playwrightTestModeEnv)
+	}
+	if appEnv != "development" {
+		return false, fmt.Errorf("%s is allowed only with APP_ENV=development", playwrightTestModeEnv)
+	}
+	if err := validatePlaywrightDatabaseTarget(databaseURL); err != nil {
+		return false, err
+	}
+	listenHost, _, err := net.SplitHostPort(valueOr(lookup, "HTTP_ADDR", defaultHTTPAddr))
+	if err != nil || listenHost != "127.0.0.1" {
+		return false, fmt.Errorf("HTTP_ADDR must bind to 127.0.0.1 when %s is enabled", playwrightTestModeEnv)
+	}
+	if valueOr(lookup, "TRUSTED_PROXY_CIDRS", "") != "127.0.0.1/32" {
+		return false, fmt.Errorf("TRUSTED_PROXY_CIDRS must be exactly 127.0.0.1/32 in %s", playwrightTestModeEnv)
+	}
+	return true, nil
+}
+
+func validatePlaywrightDatabaseTarget(raw string) error {
+	invalid := func() error {
+		return fmt.Errorf("DATABASE_URL must target 127.0.0.1:25432/todo_test when %s is enabled", playwrightTestModeEnv)
+	}
+	if strings.ContainsAny(raw, "\\\\#\x00\r\n") || strings.IndexFunc(raw, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }) >= 0 {
+		return invalid()
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
+		parsed.Opaque != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.User == nil || parsed.User.Username() == "" ||
+		parsed.Hostname() != "127.0.0.1" || parsed.Port() != "25432" || parsed.Path != "/todo_test" || parsed.EscapedPath() != "/todo_test" {
+		return invalid()
+	}
+	if parsed.RawQuery != "" && !testSSLMode.MatchString(parsed.RawQuery) {
+		return invalid()
+	}
+	if parsed.ForceQuery {
+		return invalid()
+	}
+	if _, err := pgxpool.ParseConfig(raw); err != nil {
+		return invalid()
+	}
+	return nil
 }
 
 func parseTaskCursorSigningKey(raw string, production bool) ([]byte, error) {

@@ -14,21 +14,23 @@ import (
 )
 
 type fakeAuthService struct {
-	user       auth.User
-	registered bool
-	loggedIn   bool
-	loggedOut  bool
+	user           auth.User
+	registered     bool
+	registeredName string
+	loggedIn       bool
+	loggedOut      bool
 }
 
-func (s *fakeAuthService) Register(_ context.Context, email, _, _ string) (auth.User, error) {
+func (s *fakeAuthService) Register(_ context.Context, name, email, _, _ string) (auth.User, error) {
 	s.registered = true
-	s.user = auth.User{ID: "user-123", Email: strings.ToLower(email), CreatedAt: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)}
+	s.registeredName = name
+	s.user = auth.User{ID: "user-123", Name: strings.TrimSpace(name), Email: strings.ToLower(email), Role: "USER", CreatedAt: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)}
 	return s.user, nil
 }
 
 func (s *fakeAuthService) Login(context.Context, string, string, string) (auth.User, string, time.Time, error) {
 	s.loggedIn = true
-	s.user = auth.User{ID: "user-123", Email: "person@example.test", CreatedAt: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)}
+	s.user = auth.User{ID: "user-123", Name: "Person Name", Email: "person@example.test", Role: "USER", CreatedAt: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)}
 	return s.user, "opaque-session-token", time.Now().Add(time.Hour), nil
 }
 
@@ -51,7 +53,7 @@ func TestAuthenticationHTTPFlowAndCookiePolicy(t *testing.T) {
 	options := RouterOptions{Auth: NewAuthHandlers(service, "todo_session", false), TrustedOrigin: "http://127.0.0.1:8080"}
 	handler := NewRouter(nil, testLogger(), t.TempDir(), options)
 
-	register := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"Person@Example.Test","password":"a secure example password"}`))
+	register := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"name":" Person Name ","email":"Person@Example.Test","password":"a secure example password"}`))
 	register.Header.Set("Content-Type", "application/json")
 	register.Header.Set("Origin", options.TrustedOrigin)
 	registerResult := httptest.NewRecorder()
@@ -71,9 +73,11 @@ func TestAuthenticationHTTPFlowAndCookiePolicy(t *testing.T) {
 	login.Header.Set("Origin", options.TrustedOrigin)
 	loginResult := httptest.NewRecorder()
 	handler.ServeHTTP(loginResult, login)
-	if loginResult.Code != http.StatusOK || !service.loggedIn {
+	var loginBody map[string]any
+	if loginResult.Code != http.StatusOK || !service.loggedIn || json.Unmarshal(loginResult.Body.Bytes(), &loginBody) != nil || loginBody["name"] != "Person Name" || loginBody["role"] != "USER" {
 		t.Fatalf("unexpected login response: status=%d body=%s", loginResult.Code, loginResult.Body.String())
 	}
+	assertNoAuthSecretsInResponse(t, loginResult.Body.String())
 	cookies := loginResult.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].Path != "/" || cookies[0].Value != "opaque-session-token" {
 		t.Fatalf("session cookie has unexpected policy: %+v", cookies)
@@ -84,9 +88,10 @@ func TestAuthenticationHTTPFlowAndCookiePolicy(t *testing.T) {
 	meResult := httptest.NewRecorder()
 	handler.ServeHTTP(meResult, me)
 	var body map[string]any
-	if meResult.Code != http.StatusOK || json.Unmarshal(meResult.Body.Bytes(), &body) != nil || body["email"] != "person@example.test" {
+	if meResult.Code != http.StatusOK || json.Unmarshal(meResult.Body.Bytes(), &body) != nil || body["email"] != "person@example.test" || body["name"] != "Person Name" || body["role"] != "USER" {
 		t.Fatalf("unexpected current-user response: status=%d body=%s", meResult.Code, meResult.Body.String())
 	}
+	assertNoAuthSecretsInResponse(t, meResult.Body.String())
 
 	logout := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
 	logout.Header.Set("Origin", options.TrustedOrigin)
@@ -101,12 +106,35 @@ func TestAuthenticationHTTPFlowAndCookiePolicy(t *testing.T) {
 	}
 }
 
+func TestRegistrationForwardsNameUnchangedToAuthService(t *testing.T) {
+	service := &fakeAuthService{}
+	trustedOrigin := "http://127.0.0.1:8080"
+	handler := NewRouter(nil, testLogger(), t.TempDir(), RouterOptions{
+		Auth: NewAuthHandlers(service, "todo_session", false), TrustedOrigin: trustedOrigin,
+	})
+	const submittedName = "  Person Name  "
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(
+		`{"name":"  Person Name  ","email":"person@example.test","password":"a secure example password"}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", trustedOrigin)
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+
+	if result.Code != http.StatusAccepted {
+		t.Fatalf("registration status = %d, body=%s; want %d", result.Code, result.Body.String(), http.StatusAccepted)
+	}
+	if !service.registered || service.registeredName != submittedName {
+		t.Fatalf("auth service received name %q (called=%t), want unchanged name %q", service.registeredName, service.registered, submittedName)
+	}
+}
+
 func TestRegistrationDoesNotRevealExistingAccount(t *testing.T) {
 	service := &fakeAuthService{}
 	options := RouterOptions{Auth: NewAuthHandlers(service, "todo_session", false), TrustedOrigin: "http://127.0.0.1:8080"}
 	handler := NewRouter(nil, testLogger(), t.TempDir(), options)
 	makeRequest := func() *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"Person@Example.Test","password":"a secure example password"}`))
+		request := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"name":"Person Name","email":"Person@Example.Test","password":"a secure example password"}`))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Origin", options.TrustedOrigin)
 		result := httptest.NewRecorder()
@@ -118,7 +146,7 @@ func TestRegistrationDoesNotRevealExistingAccount(t *testing.T) {
 	duplicateHandler := NewRouter(nil, testLogger(), t.TempDir(), RouterOptions{
 		Auth: NewAuthHandlers(serviceWithDuplicate, "todo_session", false), TrustedOrigin: options.TrustedOrigin,
 	})
-	duplicateRequest := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"Person@Example.Test","password":"a secure example password"}`))
+	duplicateRequest := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"name":"Person Name","email":"Person@Example.Test","password":"a secure example password"}`))
 	duplicateRequest.Header.Set("Content-Type", "application/json")
 	duplicateRequest.Header.Set("Origin", options.TrustedOrigin)
 	second := httptest.NewRecorder()
@@ -142,6 +170,7 @@ func TestAuthHTTPRejectsUntrustedOriginInvalidJSONAndLargeBody(t *testing.T) {
 	}{
 		{name: "untrusted origin", body: `{}`, contentType: "application/json", origin: "https://attacker.example", wantStatus: http.StatusForbidden},
 		{name: "client-supplied identity", body: `{"email":"person@example.test","password":"a secure example password","user_id":"someone-else"}`, contentType: "application/json", origin: "http://127.0.0.1:8080", wantStatus: http.StatusUnprocessableEntity},
+		{name: "client-supplied role", body: `{"name":"Person","email":"person@example.test","password":"a secure example password","role":"ADMIN"}`, contentType: "application/json", origin: "http://127.0.0.1:8080", wantStatus: http.StatusUnprocessableEntity},
 		{name: "false JSON media type", body: `{}`, contentType: "application/jsonx", origin: "http://127.0.0.1:8080", wantStatus: http.StatusUnsupportedMediaType},
 		{name: "oversized body", body: `{"email":"` + strings.Repeat("x", maxAuthBodyBytes) + `"}`, contentType: "application/json", origin: "http://127.0.0.1:8080", wantStatus: http.StatusRequestEntityTooLarge},
 	}
@@ -164,7 +193,7 @@ func TestAuthErrorsDoNotExposeStorageDetails(t *testing.T) {
 	handler := NewRouter(nil, testLogger(), t.TempDir(), RouterOptions{
 		Auth: NewAuthHandlers(service, "todo_session", false), TrustedOrigin: "http://127.0.0.1:8080",
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"person@example.test","password":"a secure example password"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"name":"Person Name","email":"person@example.test","password":"a secure example password"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "http://127.0.0.1:8080")
 	result := httptest.NewRecorder()
@@ -179,6 +208,15 @@ type authErrorService struct {
 	err error
 }
 
-func (s *authErrorService) Register(context.Context, string, string, string) (auth.User, error) {
+func (s *authErrorService) Register(context.Context, string, string, string, string) (auth.User, error) {
 	return auth.User{}, s.err
+}
+
+func assertNoAuthSecretsInResponse(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{`"password"`, `"password_hash"`, `"session_token"`, `"token_hash"`, "opaque-session-token", "a secure example password"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("authentication response exposed forbidden value %q: %s", forbidden, body)
+		}
+	}
 }

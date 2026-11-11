@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,17 +17,11 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestTaskSearchAndFilteringPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -46,6 +39,8 @@ func TestTaskSearchAndFilteringPostgreSQL(t *testing.T) {
 	}
 	baseEmail := "phase14-search-" + hex.EncodeToString(suffix[:])
 	emailA, emailB := baseEmail+"-a@example.test", baseEmail+"-b@example.test"
+	userAIP, userBIP := baseEmail+"-user-a", baseEmail+"-user-b"
+	loginAIP, loginBIP := baseEmail+"-login-a", baseEmail+"-login-b"
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cleanupCancel()
@@ -53,25 +48,26 @@ func TestTaskSearchAndFilteringPostgreSQL(t *testing.T) {
 			t.Errorf("clean up only the Phase 14 test accounts: %v", cleanupErr)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{userAIP, userBIP, loginAIP, loginBIP}, []string{emailA, emailB})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatalf("initialize authentication manager: %v", err)
 	}
 	password := "phase fourteen search integration password"
-	userA, err := manager.Register(ctx, emailA, password, "phase14-search-a")
+	userA, err := manager.Register(ctx, "Search User A", emailA, password, userAIP)
 	if err != nil {
 		t.Fatalf("register account A: %v", err)
 	}
-	userB, err := manager.Register(ctx, emailB, password, "phase14-search-b")
+	userB, err := manager.Register(ctx, "Search User B", emailB, password, userBIP)
 	if err != nil {
 		t.Fatalf("register account B: %v", err)
 	}
-	_, tokenA, _, err := manager.Login(ctx, emailA, password, "phase14-search-login-a")
+	_, tokenA, _, err := manager.Login(ctx, emailA, password, loginAIP)
 	if err != nil {
 		t.Fatalf("create account A session: %v", err)
 	}
-	_, tokenB, _, err := manager.Login(ctx, emailB, password, "phase14-search-login-b")
+	_, tokenB, _, err := manager.Login(ctx, emailB, password, loginBIP)
 	if err != nil {
 		t.Fatalf("create account B session: %v", err)
 	}

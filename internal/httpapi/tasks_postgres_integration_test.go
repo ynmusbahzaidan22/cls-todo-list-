@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 type taskWire struct {
@@ -60,14 +60,7 @@ type activityListWire struct {
 }
 
 func TestTaskManagementOwnershipAndLifecyclePostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -85,6 +78,8 @@ func TestTaskManagementOwnershipAndLifecyclePostgreSQL(t *testing.T) {
 	}
 	baseEmail := "phase5-" + hex.EncodeToString(suffix[:])
 	emailA, emailB := baseEmail+"-a@example.test", baseEmail+"-b@example.test"
+	userAIP, userBIP := baseEmail+"-user-a", baseEmail+"-user-b"
+	loginAIP, loginBIP := baseEmail+"-login-a", baseEmail+"-login-b"
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -92,25 +87,26 @@ func TestTaskManagementOwnershipAndLifecyclePostgreSQL(t *testing.T) {
 			t.Errorf("clean up only the two task integration accounts: %v", cleanupErr)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{userAIP, userBIP, loginAIP, loginBIP}, []string{emailA, emailB})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatalf("initialize authentication manager: %v", err)
 	}
 	password := "phase five integration password"
-	userA, err := manager.Register(ctx, emailA, password, "phase5-user-a")
+	userA, err := manager.Register(ctx, "Task User A", emailA, password, userAIP)
 	if err != nil {
 		t.Fatalf("register integration user A: %v", err)
 	}
-	userB, err := manager.Register(ctx, emailB, password, "phase5-user-b")
+	userB, err := manager.Register(ctx, "Task User B", emailB, password, userBIP)
 	if err != nil {
 		t.Fatalf("register integration user B: %v", err)
 	}
-	_, tokenA, _, err := manager.Login(ctx, emailA, password, "phase5-login-a")
+	_, tokenA, _, err := manager.Login(ctx, emailA, password, loginAIP)
 	if err != nil {
 		t.Fatalf("create user A session: %v", err)
 	}
-	_, tokenB, _, err := manager.Login(ctx, emailB, password, "phase5-login-b")
+	_, tokenB, _, err := manager.Login(ctx, emailB, password, loginBIP)
 	if err != nil {
 		t.Fatalf("create user B session: %v", err)
 	}
@@ -211,6 +207,32 @@ func TestTaskManagementOwnershipAndLifecyclePostgreSQL(t *testing.T) {
 		t.Fatalf("create user B task status = %d body=%s", userBTaskResult.Code, userBTaskResult.Body.String())
 	}
 	userBTask := decodeTaskResponse(t, userBTaskResult)
+	foreignTaskState := func() string {
+		t.Helper()
+		var state string
+		if err := pool.QueryRow(ctx, `SELECT to_jsonb(t)::text FROM app.tasks t WHERE id=$1 AND user_id=$2`, userBTask.ID, userB.ID).Scan(&state); err != nil {
+			t.Fatalf("read user B task state: %v", err)
+		}
+		return state
+	}
+	foreignActivityState := func() string {
+		t.Helper()
+		var state string
+		if err := pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.created_at, a.id), '[]'::jsonb)::text FROM app.task_activity a WHERE task_id=$1 AND user_id=$2`, userBTask.ID, userB.ID).Scan(&state); err != nil {
+			t.Fatalf("read user B task activity state: %v", err)
+		}
+		return state
+	}
+	assertUserBTaskUnchanged := func(operation string, wantTaskState, wantActivityState string) {
+		t.Helper()
+		if got := foreignTaskState(); got != wantTaskState {
+			t.Errorf("user B task changed after user A's rejected %s: got %s want %s", operation, got, wantTaskState)
+		}
+		if got := foreignActivityState(); got != wantActivityState {
+			t.Errorf("user B activity changed after user A's rejected %s: got %s want %s", operation, got, wantActivityState)
+		}
+	}
+	userBTaskState, userBActivityState := foreignTaskState(), foreignActivityState()
 	if result := sendTaskRequest(t, server, cookieA, http.MethodGet, "/api/tasks/"+userBTask.ID+"/activity", ""); result.Code != http.StatusNotFound {
 		t.Fatalf("cross-user activity access status = %d, want 404", result.Code)
 	}
@@ -301,16 +323,20 @@ func TestTaskManagementOwnershipAndLifecyclePostgreSQL(t *testing.T) {
 	if result := sendTaskRequest(t, server, cookieA, http.MethodPut, "/api/tasks/"+userBTask.ID, `{"title":"takeover","description":"","status":"DONE","version":1}`); result.Code != http.StatusNotFound {
 		t.Fatalf("cross-user update status = %d, want 404", result.Code)
 	}
+	assertUserBTaskUnchanged("update", userBTaskState, userBActivityState)
 	if result := sendTaskRequest(t, server, cookieA, http.MethodDelete, "/api/tasks/"+userBTask.ID, `{"version":1}`); result.Code != http.StatusNotFound {
 		t.Fatalf("cross-user delete status = %d, want 404", result.Code)
 	}
+	assertUserBTaskUnchanged("delete", userBTaskState, userBActivityState)
 	userBDelete := sendTaskRequest(t, server, cookieB, http.MethodDelete, "/api/tasks/"+userBTask.ID, `{"version":1}`)
 	if userBDelete.Code != http.StatusOK || decodeTaskResponse(t, userBDelete).DeletedAt == nil {
 		t.Fatalf("user B soft delete failed: %d %s", userBDelete.Code, userBDelete.Body.String())
 	}
+	deletedTaskState, deletedActivityState := foreignTaskState(), foreignActivityState()
 	if result := sendTaskRequest(t, server, cookieA, http.MethodPost, "/api/tasks/"+userBTask.ID+"/restore", `{"version":2}`); result.Code != http.StatusNotFound {
 		t.Fatalf("cross-user restore status = %d, want 404", result.Code)
 	}
+	assertUserBTaskUnchanged("restore", deletedTaskState, deletedActivityState)
 	if result := sendTaskRequest(t, server, cookieB, http.MethodGet, "/api/tasks", ""); result.Code != http.StatusOK {
 		t.Fatalf("list empty user B tasks status = %d", result.Code)
 	} else {
@@ -590,6 +616,28 @@ func getActivityPage(t *testing.T, server *httptest.Server, cookie *http.Cookie,
 	return page
 }
 
+func registerScopedFunctionCleanup(t *testing.T, pool *pgxpool.Pool, functionName string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName)); err != nil {
+			t.Errorf("drop scoped test function %s(): %v", functionName, err)
+		}
+	})
+}
+
+func registerScopedTriggerCleanup(t *testing.T, pool *pgxpool.Pool, tableName, triggerName string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.%s`, triggerName, tableName)); err != nil {
+			t.Errorf("drop scoped test trigger %s on app.%s: %v", triggerName, tableName, err)
+		}
+	})
+}
+
 func assertActivityInsertFailureRollsBack(t *testing.T, ctx context.Context, pool *pgxpool.Pool, server *httptest.Server, cookie *http.Cookie, userID, origin string) {
 	t.Helper()
 	var suffix [8]byte
@@ -612,20 +660,11 @@ func assertActivityInsertFailureRollsBack(t *testing.T, ctx context.Context, poo
 	if err != nil {
 		t.Fatalf("create isolated failure trigger function: %v", err)
 	}
+	registerScopedFunctionCleanup(t, pool, functionName)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.task_activity FOR EACH ROW EXECUTE FUNCTION app.%s()`, triggerName, functionName)); err != nil {
-		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName))
 		t.Fatalf("create isolated activity failure trigger: %v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.task_activity`, triggerName)); err != nil {
-			t.Errorf("drop isolated activity failure trigger: %v", err)
-		}
-		if _, err := pool.Exec(cleanupCtx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName)); err != nil {
-			t.Errorf("drop isolated activity trigger function: %v", err)
-		}
-	})
+	registerScopedTriggerCleanup(t, pool, "task_activity", triggerName)
 
 	createFailure := postTask(t, server, cookie, origin, `{"title":"phase7-force-activity-failure"}`)
 	if createFailure.Code != http.StatusInternalServerError || strings.Contains(createFailure.Body.String(), "forced activity") {

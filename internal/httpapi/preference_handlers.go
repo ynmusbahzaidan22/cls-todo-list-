@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/auth"
@@ -9,8 +10,8 @@ import (
 )
 
 type preferenceService interface {
-	TimeZone(context.Context, string) (string, error)
-	SetTimeZone(context.Context, string, string) error
+	TimeZone(context.Context, string) (*string, error)
+	SetTimeZone(context.Context, string, *string) error
 }
 
 type PreferenceHandlers struct{ service preferenceService }
@@ -30,7 +31,7 @@ func (h *PreferenceHandlers) get(w http.ResponseWriter, r *http.Request) {
 		writeTaskError(w, task.ErrStorage)
 		return
 	}
-	writeJSONStatus(w, http.StatusOK, map[string]string{"time_zone": zone})
+	writeJSONStatus(w, http.StatusOK, map[string]*string{"time_zone": zone})
 }
 
 func (h *PreferenceHandlers) update(w http.ResponseWriter, r *http.Request) {
@@ -40,18 +41,27 @@ func (h *PreferenceHandlers) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		TimeZone *string `json:"time_zone"`
+		TimeZone json.RawMessage `json:"time_zone"`
 	}
 	if !decodeTaskJSON(w, r, &input) {
 		return
 	}
-	if input.TimeZone == nil || !task.ValidTimeZone(*input.TimeZone) {
+	if len(input.TimeZone) == 0 {
 		writeTaskError(w, task.ErrInvalidInput)
 		return
 	}
-	if err := h.service.SetTimeZone(r.Context(), user.ID, *input.TimeZone); err != nil {
+	var zone *string
+	if string(input.TimeZone) != "null" {
+		var value string
+		if err := json.Unmarshal(input.TimeZone, &value); err != nil || !task.ValidTimeZone(value) {
+			writeTaskError(w, task.ErrInvalidInput)
+			return
+		}
+		zone = &value
+	}
+	if err := h.service.SetTimeZone(r.Context(), user.ID, zone); err != nil {
 		writeTaskError(w, task.ErrStorage)
 		return
 	}
-	writeJSONStatus(w, http.StatusOK, map[string]string{"time_zone": *input.TimeZone})
+	writeJSONStatus(w, http.StatusOK, map[string]*string{"time_zone": zone})
 }

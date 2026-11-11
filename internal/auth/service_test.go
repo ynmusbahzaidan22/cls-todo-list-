@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,7 +35,7 @@ func TestManagerFailsClosedWhenSharedRateLimitStorageIsUnavailable(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
-	if _, err := manager.Register(context.Background(), "person@example.test", "a secure example password", "127.0.0.1"); !errors.Is(err, ErrStorage) {
+	if _, err := manager.Register(context.Background(), "Person", "person@example.test", "a secure example password", "127.0.0.1"); !errors.Is(err, ErrStorage) {
 		t.Fatalf("registration when limiter storage is unavailable = %v, want ErrStorage", err)
 	}
 	if len(repository.accounts) != 0 {
@@ -45,11 +46,11 @@ func TestManagerFailsClosedWhenSharedRateLimitStorageIsUnavailable(t *testing.T)
 	}
 }
 
-func (r *memoryRepository) CreateAccount(_ context.Context, email, passwordHash string) (User, error) {
+func (r *memoryRepository) CreateAccount(_ context.Context, name, email, passwordHash string) (User, error) {
 	if _, exists := r.accounts[email]; exists {
 		return User{}, ErrEmailTaken
 	}
-	user := User{ID: "user-1", Email: email, CreatedAt: time.Now().UTC()}
+	user := User{ID: "user-1", Name: name, Email: email, Role: "USER", CreatedAt: time.Now().UTC()}
 	r.accounts[email] = Account{User: user, PasswordHash: passwordHash, Status: "ACTIVE"}
 	return user, nil
 }
@@ -64,7 +65,7 @@ func (r *memoryRepository) FindAccountByEmail(_ context.Context, email string) (
 
 func (r *memoryRepository) CreateSession(_ context.Context, tokenHash []byte, userID string, _, _, _ time.Time) error {
 	r.lastHash = append([]byte(nil), tokenHash...)
-	r.sessions[string(tokenHash)] = User{ID: userID, Email: "person@example.test", CreatedAt: time.Now().UTC()}
+	r.sessions[string(tokenHash)] = User{ID: userID, Name: "Test User", Email: "person@example.test", Role: "USER", CreatedAt: time.Now().UTC()}
 	return nil
 }
 
@@ -88,21 +89,24 @@ func TestRegisterLoginAuthenticateAndLogout(t *testing.T) {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
 	ctx := context.Background()
-	user, err := manager.Register(ctx, "  Person@Example.Test ", "a secure example password", "127.0.0.1")
+	user, err := manager.Register(ctx, "  Display Name  ", "  Person@Example.Test ", "a secure example password", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("Register returned error: %v", err)
 	}
 	if user.Email != "person@example.test" {
 		t.Fatalf("email was not normalized: %q", user.Email)
 	}
-	if _, err := manager.Register(ctx, "person@example.test", "a secure example password", "127.0.0.1"); !errors.Is(err, ErrEmailTaken) {
+	if user.Name != "Display Name" || user.Role != "USER" {
+		t.Fatalf("registration did not normalize name and assign USER role: %+v", user)
+	}
+	if _, err := manager.Register(ctx, "Duplicate Name", "person@example.test", "a secure example password", "127.0.0.1"); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("duplicate registration error = %v, want ErrEmailTaken", err)
 	}
 	loggedIn, token, expiry, err := manager.Login(ctx, "PERSON@example.test", "a secure example password", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("Login returned error: %v", err)
 	}
-	if token == "" || !expiry.After(time.Now()) || loggedIn.Email != user.Email {
+	if token == "" || !expiry.After(time.Now()) || loggedIn.Email != user.Email || loggedIn.Name != user.Name || loggedIn.Role != "USER" {
 		t.Fatalf("unexpected login result: user=%+v expiry=%v token-empty=%v", loggedIn, expiry, token == "")
 	}
 	if len(repository.lastHash) != 32 || string(repository.lastHash) == token {
@@ -135,10 +139,41 @@ func TestRegisterRejectsInvalidInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
-	if _, err := manager.Register(context.Background(), "not-an-email", "a secure example password", "127.0.0.1"); !errors.Is(err, ErrInvalidInput) {
+	if _, err := manager.Register(context.Background(), "Person", "not-an-email", "a secure example password", "127.0.0.1"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid email error = %v, want ErrInvalidInput", err)
 	}
-	if _, err := manager.Register(context.Background(), "valid@example.test", "short", "127.0.0.1"); !errors.Is(err, ErrInvalidInput) {
+	if _, err := manager.Register(context.Background(), "Person", "valid@example.test", "short", "127.0.0.1"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("short password error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestRegisterValidatesAndTrimsName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "minimum one character", input: "A"},
+		{name: "maximum one hundred characters", input: strings.Repeat("a", 100)},
+		{name: "empty", input: "", wantErr: true},
+		{name: "whitespace only", input: " \t\n ", wantErr: true},
+		{name: "over one hundred characters", input: strings.Repeat("a", 101), wantErr: true},
+		{name: "unicode counts as characters", input: strings.Repeat("界", 100)},
+		{name: "unicode over character limit", input: strings.Repeat("界", 101), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, err := NewManager(newMemoryRepository())
+			if err != nil {
+				t.Fatalf("NewManager returned error: %v", err)
+			}
+			_, registerErr := manager.Register(context.Background(), test.input, "valid@example.test", "a secure example password", "127.0.0.1")
+			if test.wantErr && !errors.Is(registerErr, ErrInvalidInput) {
+				t.Fatalf("Register error = %v, want ErrInvalidInput", registerErr)
+			}
+			if !test.wantErr && registerErr != nil {
+				t.Fatalf("Register returned error: %v", registerErr)
+			}
+		})
 	}
 }

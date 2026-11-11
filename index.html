@@ -67,6 +67,12 @@
 
         <form class="auth-form" id="register-form" novalidate hidden>
           <div class="field-group">
+            <label class="field-label" for="register-name">Name</label>
+            <input class="auth-input" id="register-name" name="name" type="text" autocomplete="name" placeholder="Your name" maxlength="100" required aria-describedby="register-name-hint register-name-error">
+            <p class="field-hint" id="register-name-hint">Use 1–100 characters.</p>
+            <p class="field-error" id="register-name-error"></p>
+          </div>
+          <div class="field-group">
             <label class="field-label" for="register-email">Email address</label>
             <input class="auth-input" id="register-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required aria-describedby="register-email-error">
             <p class="field-error" id="register-email-error"></p>
@@ -106,6 +112,32 @@
       </section>
 
       <section class="todo-card" id="todo-view" aria-labelledby="page-title" hidden>
+        <section class="admin-account-panel" id="admin-account-panel" aria-labelledby="admin-account-title" hidden>
+          <h2 id="admin-account-title">Account administration</h2>
+          <p>Manage account roles and access. Changes revoke the affected account's existing sessions.</p>
+          <p id="admin-account-feedback" role="status" aria-live="polite"></p>
+          <div id="admin-account-loading" role="status" hidden>Loading accounts…</div>
+          <div id="admin-account-error" role="alert" hidden></div>
+          <div id="admin-account-list" class="admin-account-list" aria-busy="false"></div>
+        </section>
+        <details class="task-options timezone-preference" id="timezone-preference">
+          <summary class="task-options-summary">
+            <span class="task-options-summary-title">Time zone</span>
+            <span class="task-options-summary-hint" id="timezone-preference-summary">Using your device time zone</span>
+          </summary>
+          <form class="task-options-fields" id="timezone-preference-form" novalidate>
+            <div class="task-option-field">
+              <label class="input-label" for="timezone-override-input">Manual IANA time zone</label>
+              <input id="timezone-override-input" name="time_zone" type="text" maxlength="100" autocomplete="off" placeholder="America/New_York" aria-describedby="timezone-preference-help timezone-preference-feedback">
+              <p class="field-hint" id="timezone-preference-help">Leave this blank and choose “Use device time zone” to follow this browser. Dates remain calendar dates; the selected zone controls today and overdue calculations.</p>
+            </div>
+            <div class="form-actions">
+              <button class="secondary-button" id="save-timezone-override" type="submit">Save time zone</button>
+              <button class="secondary-button" id="use-device-timezone" type="button">Use device time zone</button>
+            </div>
+            <p class="activity-action-feedback" id="timezone-preference-feedback" role="status" aria-live="polite" hidden></p>
+          </form>
+        </details>
         <div id="tasks-screen">
 
         <form class="task-form" id="task-form" novalidate>
@@ -137,7 +169,7 @@
                     <input id="task-due-date-input" name="due_date" type="date" aria-describedby="due-date-help">
                     <button class="secondary-button" id="clear-new-due-date" type="button">Clear date</button>
                   </div>
-                  <p class="field-hint" id="due-date-help">A calendar date based on your device's time zone.</p>
+                  <p class="field-hint" id="due-date-help">A calendar date. Your selected time zone controls today and overdue calculations.</p>
                 </div>
               </div>
             </div>

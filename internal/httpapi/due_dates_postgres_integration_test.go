@@ -9,27 +9,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/auth"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestDueDatesAndTimeZonesPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target loopback PostgreSQL")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +38,9 @@ func TestDueDatesAndTimeZonesPostgreSQL(t *testing.T) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		t.Fatal(err)
 	}
-	email := "phase16-due-" + hex.EncodeToString(suffix[:]) + "@example.test"
+	identity := hex.EncodeToString(suffix[:])
+	email := "phase16-due-" + identity + "@example.test"
+	registerIP, loginIP := "phase16-due-register-"+identity, "phase16-due-login-"+identity
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 8*time.Second)
 		defer stop()
@@ -52,15 +48,16 @@ func TestDueDatesAndTimeZonesPostgreSQL(t *testing.T) {
 			t.Errorf("cleanup Phase 16 test account: %v", err)
 		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{registerIP, loginIP}, []string{email})
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := manager.Register(ctx, email, "phase sixteen due integration password", "phase16-due")
+	user, err := manager.Register(ctx, "Due Date User", email, "phase sixteen due integration password", registerIP)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, token, _, err := manager.Login(ctx, email, "phase sixteen due integration password", "phase16-due-login")
+	_, token, _, err := manager.Login(ctx, email, "phase sixteen due integration password", loginIP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,9 +71,25 @@ func TestDueDatesAndTimeZonesPostgreSQL(t *testing.T) {
 		Templates: NewTemplateHandlers(templateService), Preferences: NewPreferenceHandlers(preferences), TrustedOrigin: "http://127.0.0.1:8080",
 	}))
 	defer server.Close()
-	var zone string
-	if err := pool.QueryRow(ctx, `SELECT time_zone FROM app.users WHERE id=$1`, user.ID).Scan(&zone); err != nil || zone != "UTC" {
-		t.Fatalf("new account timezone=%q err=%v; want UTC", zone, err)
+	var zone pgtype.Text
+	if err := pool.QueryRow(ctx, `SELECT time_zone FROM app.users WHERE id=$1`, user.ID).Scan(&zone); err != nil || zone.Valid {
+		t.Fatalf("new account timezone valid=%t err=%v; want device default NULL", zone.Valid, err)
+	}
+	preferencesResponse := sendTaskRequest(t, server, cookie, http.MethodGet, "/api/preferences", "")
+	if preferencesResponse.Code != http.StatusOK || !strings.Contains(preferencesResponse.Body.String(), `"time_zone":null`) {
+		t.Fatalf("new account preference response=%d %s; want device default", preferencesResponse.Code, preferencesResponse.Body.String())
+	}
+	if result := sendTaskRequest(t, server, cookie, http.MethodPut, "/api/preferences", `{"time_zone":"America/Los_Angeles"}`); result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"time_zone":"America/Los_Angeles"`) {
+		t.Fatalf("persist manual timezone: %d %s", result.Code, result.Body.String())
+	}
+	if result := sendTaskRequest(t, server, cookie, http.MethodPut, "/api/preferences", `{"time_zone":null}`); result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"time_zone":null`) {
+		t.Fatalf("reset to device timezone: %d %s", result.Code, result.Body.String())
+	}
+	if err := pool.QueryRow(ctx, `SELECT time_zone FROM app.users WHERE id=$1`, user.ID).Scan(&zone); err != nil || zone.Valid {
+		t.Fatalf("device timezone reset valid=%t err=%v; want NULL", zone.Valid, err)
+	}
+	if result := sendTaskRequest(t, server, cookie, http.MethodPut, "/api/preferences", `{"time_zone":"Asia/Amman"}`); result.Code != http.StatusOK {
+		t.Fatalf("set timezone: %d %s", result.Code, result.Body.String())
 	}
 	var dbToday string
 	if err := pool.QueryRow(ctx, `SELECT to_char((clock_timestamp() AT TIME ZONE time_zone)::date,'YYYY-MM-DD') FROM app.users WHERE id=$1`, user.ID).Scan(&dbToday); err != nil {
@@ -288,20 +301,11 @@ func TestDueDatesAndTimeZonesPostgreSQL(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION app.%s() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.user_id='%s'::uuid AND (NEW.event_type='TASK_DUE_DATE_CHANGED' OR NEW.event_type='TASK_CREATED') THEN RAISE EXCEPTION 'Phase 16 scoped activity insert failure'; END IF; RETURN NEW; END $body$`, functionName, user.ID)); err != nil {
 		t.Fatal("create scoped Phase 16 trigger function:", err)
 	}
+	registerScopedFunctionCleanup(t, pool, functionName)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON app.task_activity FOR EACH ROW EXECUTE FUNCTION app.%s()`, triggerName, functionName)); err != nil {
-		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName))
 		t.Fatal("create scoped Phase 16 trigger:", err)
 	}
-	t.Cleanup(func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		if _, err := pool.Exec(cleanup, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON app.task_activity`, triggerName)); err != nil {
-			t.Errorf("drop Phase 16 test trigger: %v", err)
-		}
-		if _, err := pool.Exec(cleanup, fmt.Sprintf(`DROP FUNCTION IF EXISTS app.%s()`, functionName)); err != nil {
-			t.Errorf("drop Phase 16 test function: %v", err)
-		}
-	})
+	registerScopedTriggerCleanup(t, pool, "task_activity", triggerName)
 	failure := sendTaskRequest(t, server, cookie, http.MethodPut, "/api/tasks/"+atomic.ID, httpBodyWithDue(atomic.Title, 1, fmt.Sprintf("%q", tomorrow)))
 	if failure.Code != http.StatusInternalServerError {
 		t.Fatalf("due history failure status=%d want=500: %s", failure.Code, failure.Body.String())

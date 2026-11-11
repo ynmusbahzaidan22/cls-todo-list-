@@ -5,6 +5,8 @@ let authState = { status: "checking-session" };
 let authMode = "login";
 let currentUser = null;
 const DEVICE_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+let activeTimeZone = DEVICE_TIME_ZONE;
+let timeZoneRequestGeneration = 0;
 const COMPLETED_PAGE_SIZE = 10;
 
 const checkingView = document.querySelector("#checking-view");
@@ -47,13 +49,24 @@ const loginForm = document.querySelector("#login-form");
 const registerForm = document.querySelector("#register-form");
 const loginEmail = document.querySelector("#login-email");
 const loginPassword = document.querySelector("#login-password");
+const registerName = document.querySelector("#register-name");
 const registerEmail = document.querySelector("#register-email");
 const registerPassword = document.querySelector("#register-password");
 const registerConfirmPassword = document.querySelector("#register-confirm-password");
 const logoutButton = document.querySelector("#logout-button");
+const adminAccountPanel = document.querySelector("#admin-account-panel");
+const adminAccountList = document.querySelector("#admin-account-list");
+const adminAccountLoading = document.querySelector("#admin-account-loading");
+const adminAccountError = document.querySelector("#admin-account-error");
+const adminAccountFeedback = document.querySelector("#admin-account-feedback");
+let adminAccountCursor = null;
 const loginSubmitLabel = document.querySelector("#login-submit-label");
 const registerSubmitLabel = document.querySelector("#register-submit-label");
 const signedInEmail = document.querySelector("#signed-in-email");
+const timeZonePreferenceSummary = document.querySelector("#timezone-preference-summary");
+const timeZoneOverrideInput = document.querySelector("#timezone-override-input");
+const timeZonePreferenceFeedback = document.querySelector("#timezone-preference-feedback");
+const useDeviceTimeZoneButton = document.querySelector("#use-device-timezone");
 const retrySessionButton = document.querySelector("#retry-session-button");
 const authTabs = [...document.querySelectorAll("[data-auth-mode]")];
 const authChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("todo-list-auth") : null;
@@ -93,6 +106,7 @@ function renderAuthState() {
     "submitting-logout",
   ].includes(status) && !(status === "recoverable-error" && errorContext === "logout");
   const workspaceVisible = !authenticatedView.hidden && Boolean(currentUser);
+  adminAccountPanel.hidden = !workspaceVisible || currentUser?.role !== "ADMIN";
   todoView.hidden = !workspaceVisible;
   tasksScreen.hidden = !workspaceVisible || workspaceScreen !== "tasks";
   recentlyDeletedScreen.hidden = !workspaceVisible || workspaceScreen !== "deleted";
@@ -259,6 +273,17 @@ function validateEmail(input) {
   return value;
 }
 
+function validateDisplayName(input) {
+  const value = input.value.trim();
+  const characterCount = Array.from(value).length;
+  if (characterCount < 1 || characterCount > 100) {
+    setFieldError(input, "Enter a name with 1 to 100 characters.");
+    return "";
+  }
+  setFieldError(input, "");
+  return value;
+}
+
 function validatePassword(input, { registration = false } = {}) {
   const value = input.value;
   if (!value) {
@@ -278,10 +303,10 @@ function validatePassword(input, { registration = false } = {}) {
 }
 
 function getPublicUser(data) {
-  if (!data || typeof data.id !== "string" || typeof data.email !== "string") {
+  if (!data || typeof data.id !== "string" || typeof data.name !== "string" || typeof data.email !== "string" || !["USER", "ADMIN"].includes(data.role)) {
     throw new Error("The server returned an unexpected response.");
   }
-  return { id: data.id, email: data.email };
+  return { id: data.id, name: data.name, email: data.email, role: data.role };
 }
 
 async function readJSON(response) {
@@ -425,15 +450,17 @@ async function submitRegistration(event) {
   if (authState.status.startsWith("submitting-")) return;
 
   clearAuthFeedback();
+  const name = validateDisplayName(registerName);
   const email = validateEmail(registerEmail);
   const passwordIsValid = validatePassword(registerPassword, { registration: true });
   const confirmationMatches = registerConfirmPassword.value === registerPassword.value;
   setFieldError(registerConfirmPassword, confirmationMatches ? "" : "The passwords don't match.");
-  if (!email || !passwordIsValid || !confirmationMatches) return;
+  if (!name || !email || !passwordIsValid || !confirmationMatches) return;
 
   setAuthState("submitting-register", { operation: "register" });
   try {
     const { response, data } = await postAuth("/api/auth/register", {
+      name,
       email,
       password: registerPassword.value,
     });
@@ -893,7 +920,7 @@ async function applyTemplate() {
   templateState.pending = true; document.querySelector("#template-apply-confirm").disabled = true;
   const ownerId = currentUser.id; const generation = taskSessionGeneration;
   try {
-    const { response, data } = await taskRequest(`/api/task-templates/${template.id}/apply`, { method: "POST", body: { version: template.version, mode: templateState.applyingMode || "incremental", time_zone: DEVICE_TIME_ZONE } });
+    const { response, data } = await taskRequest(`/api/task-templates/${template.id}/apply`, { method: "POST", body: { version: template.version, mode: templateState.applyingMode || "incremental", time_zone: activeTimeZone } });
     if (!taskIsCurrent(generation, ownerId)) return;
     if (response.status === 401) { expireTaskSession(generation, ownerId); return; }
     if (!response.ok) throw new Error(taskErrorMessage(response, data, "Couldn't create tasks from this template."));
@@ -1033,7 +1060,7 @@ function createEmptyTaskWorkspace(ownerId = null) {
   };
 }
 
-function initializeTaskWorkspace(user) {
+async function initializeTaskWorkspace(user) {
   if (!user?.id) return;
   if (taskWorkspace.ownerId !== user.id) {
     taskSessionGeneration += 1;
@@ -1055,11 +1082,216 @@ function initializeTaskWorkspace(user) {
     taskForm.reset();
     resetTemplateState(user.id);
   }
+  const generation = taskSessionGeneration;
+  const preferenceGeneration = ++timeZoneRequestGeneration;
+  await loadTimeZonePreference(user.id, generation, preferenceGeneration);
+  if (!taskIsCurrent(generation, user.id) || preferenceGeneration !== timeZoneRequestGeneration) return;
   void loadTasks(true);
+  if (user.role === "ADMIN") void loadAdminAccounts();
   void loadDeletedTaskCount();
   if (workspaceScreen === "deleted") void loadDeletedTasks(true);
   else void loadDeletedTasks(true, DELETED_PREVIEW_SIZE);
   if (workspaceScreen === "completed") void loadCompletedTasks(true);
+  void loadTemplates();
+}
+
+async function loadAdminAccounts(append = false, preserveFeedback = false) {
+  if (currentUser?.role !== "ADMIN") return;
+  const actorId = currentUser.id;
+  const cursor = append ? adminAccountCursor : null;
+  if (!append) {
+    adminAccountCursor = null;
+    adminAccountList.replaceChildren();
+    if (!preserveFeedback) adminAccountFeedback.textContent = "";
+  }
+  adminAccountError.hidden = true;
+  adminAccountLoading.hidden = false;
+  adminAccountList.setAttribute("aria-busy", "true");
+  try {
+    const query = new URLSearchParams({ limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const { response, data } = await taskRequest(`/api/admin/users?${query.toString()}`);
+    if (currentUser?.id !== actorId) return false;
+    if (!response.ok || !Array.isArray(data?.items)) throw new Error("We couldn't load account administration.");
+    for (const account of data.items) renderAdminAccount(account);
+    adminAccountCursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
+    adminAccountList.querySelector(".admin-load-more")?.remove();
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "secondary-button admin-load-more";
+    more.textContent = "Load more accounts";
+    more.hidden = !adminAccountCursor;
+    more.addEventListener("click", () => void loadAdminAccounts(true));
+    adminAccountList.append(more);
+    return true;
+  } catch {
+    if (currentUser?.id === actorId) {
+      adminAccountError.textContent = "Account administration is unavailable. Refresh and try again.";
+      adminAccountError.hidden = false;
+    }
+    return false;
+  } finally {
+    adminAccountLoading.hidden = true;
+    adminAccountList.setAttribute("aria-busy", "false");
+  }
+}
+
+function renderAdminAccount(account) {
+  if (!account || typeof account.id !== "string" || typeof account.name !== "string" || typeof account.email !== "string") return;
+  const row = document.createElement("article");
+  row.className = "admin-account-row";
+  const identity = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = account.name;
+  const email = document.createElement("p");
+  email.textContent = account.email;
+  const state = document.createElement("p");
+  state.textContent = `Role: ${account.role} · Status: ${account.status}`;
+  identity.append(title, email, state);
+  row.append(identity);
+  if (account.protection_reason) {
+    const note = document.createElement("p");
+    note.className = "admin-protection-note";
+    note.textContent = account.protection_reason === "self" ? "Your current account is protected from self-management." : "The final active administrator is protected.";
+    row.append(note);
+  }
+  if (account.can_change_role) {
+    const roleLabel = document.createElement("label");
+    roleLabel.textContent = "Role";
+    const role = document.createElement("select");
+    role.setAttribute("aria-label", `Role for ${account.name}`);
+    for (const value of ["USER", "ADMIN"]) {
+      const option = document.createElement("option"); option.value = value; option.textContent = value; option.selected = account.role === value; role.append(option);
+    }
+    roleLabel.append(role);
+    const changeRole = document.createElement("button");
+    changeRole.type = "button"; changeRole.className = "secondary-button"; changeRole.textContent = "Change role";
+    changeRole.addEventListener("click", () => {
+      if (role.value === account.role || !window.confirm(`Change ${account.name}'s role to ${role.value}? Their current sessions will be revoked.`)) return;
+      void performAdminMutation(account.id, "role", { role: role.value });
+    });
+    row.append(roleLabel, changeRole);
+  }
+  if (account.can_change_status) {
+    const statusButton = document.createElement("button");
+    statusButton.type = "button"; statusButton.className = account.status === "ACTIVE" ? "delete-button" : "secondary-button";
+    statusButton.textContent = account.status === "ACTIVE" ? "Disable account" : "Enable account";
+    statusButton.addEventListener("click", () => {
+      const next = account.status === "ACTIVE" ? "DISABLED" : "ACTIVE";
+      if (!window.confirm(`${next === "DISABLED" ? "Disable" : "Enable"} ${account.name}'s account? Existing sessions will be revoked.`)) return;
+      void performAdminMutation(account.id, "status", { status: next });
+    });
+    row.append(statusButton);
+  }
+  if (account.can_revoke_sessions) {
+    const revoke = document.createElement("button");
+    revoke.type = "button"; revoke.className = "secondary-button"; revoke.textContent = "Revoke sessions";
+    revoke.addEventListener("click", () => {
+      if (window.confirm(`Revoke all active sessions for ${account.name}?`)) void performAdminMutation(account.id, "sessions/revoke", {});
+    });
+    row.append(revoke);
+  }
+  adminAccountList.append(row);
+}
+
+async function performAdminMutation(userId, action, body) {
+  adminAccountFeedback.textContent = "Updating account…";
+  try {
+    const method = action === "sessions/revoke" ? "POST" : "PATCH";
+    const { response, data } = await taskRequest(`/api/admin/users/${encodeURIComponent(userId)}/${action}`, { method, body });
+    if (response.status === 409) throw new Error("The final active administrator cannot be disabled or demoted.");
+    if (response.status === 403) throw new Error("This account-management action is not permitted.");
+    if (!response.ok) throw new Error("The account change could not be completed.");
+    const successMessage = action === "sessions/revoke" ? `Revoked ${data?.revoked_sessions ?? 0} active session(s).` : "Account updated. Its existing sessions were revoked.";
+    const refreshed = await loadAdminAccounts(false, true);
+    adminAccountFeedback.textContent = refreshed ? successMessage : "The account change succeeded, but the list could not be refreshed.";
+  } catch (error) {
+    adminAccountFeedback.textContent = error instanceof Error ? error.message : "The account change could not be completed.";
+  }
+}
+
+function validBrowserTimeZone(value) {
+  if (typeof value !== "string" || !value || value.length > 100 || value === "Local") return false;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function renderTimeZonePreference() {
+  if (!timeZonePreferenceSummary || !timeZoneOverrideInput) return;
+  const isDevice = activeTimeZone === DEVICE_TIME_ZONE;
+  timeZonePreferenceSummary.textContent = isDevice ? `Using your device time zone (${DEVICE_TIME_ZONE})` : `Using ${activeTimeZone}`;
+  timeZoneOverrideInput.value = isDevice ? "" : activeTimeZone;
+}
+
+async function loadTimeZonePreference(ownerId, generation, preferenceGeneration) {
+  try {
+    const { response, data } = await taskRequest("/api/preferences");
+    if (!taskIsCurrent(generation, ownerId) || preferenceGeneration !== timeZoneRequestGeneration) return;
+    if (response.status === 401) {
+      expireTaskSession(generation, ownerId);
+      return;
+    }
+    if (!response.ok || !data || !(data.time_zone === null || validBrowserTimeZone(data.time_zone))) {
+      throw new Error("Preference response was invalid.");
+    }
+    activeTimeZone = data.time_zone || DEVICE_TIME_ZONE;
+    renderTimeZonePreference();
+    if (timeZonePreferenceFeedback) timeZonePreferenceFeedback.hidden = true;
+  } catch {
+    if (!taskIsCurrent(generation, ownerId) || preferenceGeneration !== timeZoneRequestGeneration) return;
+    activeTimeZone = DEVICE_TIME_ZONE;
+    renderTimeZonePreference();
+    if (timeZonePreferenceFeedback) {
+      timeZonePreferenceFeedback.textContent = "We couldn't load your saved time zone. Using this device's time zone until preferences can be refreshed.";
+      timeZonePreferenceFeedback.dataset.kind = "error";
+      timeZonePreferenceFeedback.hidden = false;
+    }
+  }
+}
+
+async function saveTimeZonePreference(timeZone) {
+  if (!currentUser?.id) return;
+  const requested = timeZone === null ? DEVICE_TIME_ZONE : timeZone;
+  if (!validBrowserTimeZone(requested)) {
+    if (timeZonePreferenceFeedback) {
+      timeZonePreferenceFeedback.textContent = "Enter a valid IANA time zone, such as America/New_York.";
+      timeZonePreferenceFeedback.dataset.kind = "error";
+      timeZonePreferenceFeedback.hidden = false;
+    }
+    return;
+  }
+  const ownerId = currentUser.id;
+  const generation = taskSessionGeneration;
+  const { response, data } = await taskRequest("/api/preferences", {
+    method: "PUT",
+    body: { time_zone: timeZone },
+  }).catch(() => ({ response: null, data: null }));
+  if (!taskIsCurrent(generation, ownerId)) return;
+  if (!response?.ok || data?.time_zone !== timeZone) {
+    if (response?.status === 401) expireTaskSession(generation, ownerId);
+    if (timeZonePreferenceFeedback) {
+      timeZonePreferenceFeedback.textContent = response ? taskErrorMessage(response, data, "We couldn't save the time zone.") : "We couldn't reach the preference service. Try again.";
+      timeZonePreferenceFeedback.dataset.kind = "error";
+      timeZonePreferenceFeedback.hidden = false;
+    }
+    return;
+  }
+  activeTimeZone = requested;
+  renderTimeZonePreference();
+  if (timeZonePreferenceFeedback) {
+    timeZonePreferenceFeedback.textContent = timeZone === null ? "Using this device's time zone." : "Time zone preference saved.";
+    timeZonePreferenceFeedback.dataset.kind = "success";
+    timeZonePreferenceFeedback.hidden = false;
+  }
+  lastLocalCalendarDate = currentAccountDate();
+  taskWorkspace.selectedIds.clear();
+  void loadTasks(true);
+  void loadDeletedTasks(true, workspaceScreen === "deleted" ? TASK_PAGE_SIZE : DELETED_PREVIEW_SIZE);
+  void loadCompletedTasks(true);
   void loadTemplates();
 }
 
@@ -1192,7 +1424,7 @@ async function loadTasks(reset = false) {
   if (taskWorkspace.statusFilter) path.set("status", taskWorkspace.statusFilter);
   if (taskWorkspace.priorityFilter) path.set("priority", taskWorkspace.priorityFilter);
   if (taskWorkspace.dueFilter) path.set("due", taskWorkspace.dueFilter);
-  path.set("tz", DEVICE_TIME_ZONE);
+  path.set("tz", activeTimeZone);
   if (cursor) path.set("cursor", cursor);
   try {
     const { response, data } = await taskRequest(`/api/tasks?${path.toString()}`);
@@ -1345,7 +1577,7 @@ async function loadCompletedTasks(reset = false) {
   const mutationGeneration = taskMutationGeneration;
   const cursor = reset ? null : taskWorkspace.completedNextCursor;
   renderCompletedTasks();
-  const query = new URLSearchParams({ limit: String(COMPLETED_PAGE_SIZE), period: taskWorkspace.completedPeriod, tz: DEVICE_TIME_ZONE });
+  const query = new URLSearchParams({ limit: String(COMPLETED_PAGE_SIZE), period: taskWorkspace.completedPeriod, tz: activeTimeZone });
   if (cursor) query.set("cursor", cursor);
   try {
     const { response, data } = await taskRequest("/api/tasks/completed?" + query.toString());
@@ -1427,7 +1659,7 @@ function renderCompletedTasks() {
     const completedAt = document.createElement("p");
     completedAt.className = "completed-task-date";
     const date = new Date(task.completed_at);
-    completedAt.textContent = Number.isNaN(date.valueOf()) ? "Completed" : "Completed " + new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+     completedAt.textContent = Number.isNaN(date.valueOf()) ? "Completed" : "Completed " + new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: activeTimeZone }).format(date);
     content.append(completedAt);
     const actions = document.createElement("div");
     actions.className = "task-actions";
@@ -1615,8 +1847,8 @@ function renderTaskRows() {
     content.append(heading);
     if (task.due_date) {
       const due = document.createElement("p");
-      const overdue = isTaskOverdueInDeviceZone(task);
-      const dueToday = isTaskDueTodayInDeviceZone(task);
+      const overdue = isTaskOverdueInActiveZone(task);
+      const dueToday = isTaskDueTodayInActiveZone(task);
       due.className = `task-due-date${overdue ? " is-overdue" : dueToday ? " is-due-today" : ""}`;
       due.textContent = overdue
         ? `Overdue · Due ${formatCivilDate(task.due_date)}`
@@ -1972,7 +2204,7 @@ function renderActivity() {
     date.className = "activity-event-date";
     date.dateTime = event.created_at;
     const parsedDate = new Date(event.created_at);
-    date.textContent = Number.isNaN(parsedDate.valueOf()) ? "Time unavailable" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsedDate);
+     date.textContent = Number.isNaN(parsedDate.valueOf()) ? "Time unavailable" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: activeTimeZone }).format(parsedDate);
     const actor = document.createElement("span");
     actor.className = "activity-event-actor";
     actor.textContent = event.actor_user_id && event.actor_user_id === currentUser?.id ? "You" : "Account user";
@@ -2714,18 +2946,18 @@ completedTaskList.addEventListener("click", (event) => {
 let lastLocalCalendarDate = currentAccountDate();
 function currentAccountDate() {
   try {
-    const parts = new Intl.DateTimeFormat("en", { timeZone: DEVICE_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const parts = new Intl.DateTimeFormat("en", { timeZone: activeTimeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
     const get = (type) => parts.find((part) => part.type === type)?.value;
     return `${get("year")}-${get("month")}-${get("day")}`;
   }
   catch { return ""; }
 }
 
-function isTaskOverdueInDeviceZone(task) {
+function isTaskOverdueInActiveZone(task) {
   const today = currentAccountDate();
   return Boolean(task.due_date && task.status !== "DONE" && !task.deleted_at && today && task.due_date < today);
 }
-function isTaskDueTodayInDeviceZone(task) {
+function isTaskDueTodayInActiveZone(task) {
   const today = currentAccountDate();
   return Boolean(task.due_date && task.status !== "DONE" && !task.deleted_at && today && task.due_date === today);
 }
@@ -2751,6 +2983,20 @@ setInterval(() => {
 
 deletedTaskList.addEventListener("click", handleDeletedTaskListClick);
 deletedPreviewList.addEventListener("click", handleDeletedTaskListClick);
+document.querySelector("#timezone-preference-form")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const value = timeZoneOverrideInput?.value.trim() || "";
+  if (!value) {
+    if (timeZonePreferenceFeedback) {
+      timeZonePreferenceFeedback.textContent = "Enter an IANA time zone or choose Use device time zone.";
+      timeZonePreferenceFeedback.dataset.kind = "error";
+      timeZonePreferenceFeedback.hidden = false;
+    }
+    return;
+  }
+  void saveTimeZonePreference(value);
+});
+useDeviceTimeZoneButton?.addEventListener("click", () => void saveTimeZonePreference(null));
 
 function handleDeletedTaskListClick(event) {
   const historyButton = event.target.closest('button[data-action="activity"]');

@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,17 +21,11 @@ import (
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/auth"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/health"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/repository"
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/testdatabase"
 )
 
 func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test skipped")
-	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must target a loopback PostgreSQL server")
-	}
+	databaseURL, _ := testdatabase.TestURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatalf("connect test PostgreSQL: %v", err)
@@ -49,7 +42,7 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 		t.Fatalf("generate test account suffix: %v", err)
 	}
 	email := "phase3-" + hex.EncodeToString(suffix[:]) + "@example.test"
-	testIP := net.IPv4(198, 18, suffix[0], suffix[1]).String()
+	testIP := net.IP{0x20, 0x01, 0x0d, 0xb8, suffix[0], suffix[1], suffix[2], suffix[3], suffix[4], suffix[5], suffix[6], suffix[7], suffix[8], suffix[9], suffix[10], suffix[11]}.String()
 	password := "phase three integration password"
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -57,13 +50,8 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 		if _, cleanupErr := pool.Exec(cleanupCtx, "DELETE FROM app.users WHERE email = $1", email); cleanupErr != nil {
 			t.Errorf("clean up only this test account: %v", cleanupErr)
 		}
-		for _, key := range []string{"register:ip:" + testIP, "login:ip:" + testIP} {
-			keyHash := sha256.Sum256([]byte(key))
-			if _, cleanupErr := pool.Exec(cleanupCtx, `DELETE FROM app.auth_rate_limits WHERE key_hash = $1`, keyHash[:]); cleanupErr != nil {
-				t.Errorf("clean up only this test rate-limit key: %v", cleanupErr)
-			}
-		}
 	})
+	registerRateLimitTestCleanup(t, pool, []string{testIP}, []string{email})
 
 	manager, err := auth.NewManager(repository.NewAuthRepository(pool))
 	if err != nil {
@@ -87,7 +75,7 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 		t.Fatalf("database readiness response = %d, %s", ready.Code, ready.Body.String())
 	}
 
-	register := makeJSONRequest(http.MethodPost, "/api/auth/register", fmt.Sprintf(`{"email":%q,"password":%q}`, strings.ToUpper(email), password), trustedOrigin, nil)
+	register := makeJSONRequest(http.MethodPost, "/api/auth/register", fmt.Sprintf(`{"name":%q,"email":%q,"password":%q}`, "Integration User", strings.ToUpper(email), password), trustedOrigin, nil)
 	registerResult := performHTTP(t, server, register)
 	if registerResult.Code != http.StatusAccepted {
 		t.Fatalf("register status = %d, body=%s", registerResult.Code, registerResult.Body.String())
@@ -96,7 +84,7 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 	if err := json.Unmarshal(registerResult.Body.Bytes(), &registrationResponse); err != nil || registrationResponse["status"] != "accepted" {
 		t.Fatalf("unexpected registration response: %+v, err=%v", registrationResponse, err)
 	}
-	duplicate := makeJSONRequest(http.MethodPost, "/api/auth/register", fmt.Sprintf(`{"email":%q,"password":%q}`, email, password), trustedOrigin, nil)
+	duplicate := makeJSONRequest(http.MethodPost, "/api/auth/register", fmt.Sprintf(`{"name":%q,"email":%q,"password":%q}`, "Integration User", email, password), trustedOrigin, nil)
 	duplicateResult := performHTTP(t, server, duplicate)
 	if duplicateResult.Code != http.StatusAccepted || duplicateResult.Body.String() != registerResult.Body.String() {
 		t.Fatalf("duplicate registration status = %d, body=%s", duplicateResult.Code, duplicateResult.Body.String())
@@ -106,6 +94,10 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM app.users WHERE email = $1`, email).Scan(&registered.ID); err != nil || registered.ID == "" {
 		t.Fatalf("read created account identifier: id=%q err=%v", registered.ID, err)
+	}
+	var registeredName, registeredRole string
+	if err := pool.QueryRow(ctx, `SELECT name, role FROM app.users WHERE id = $1`, registered.ID).Scan(&registeredName, &registeredRole); err != nil || registeredName != "Integration User" || registeredRole != "USER" {
+		t.Fatalf("registered identity = name %q role %q err=%v", registeredName, registeredRole, err)
 	}
 
 	wrongLogin := makeJSONRequest(http.MethodPost, "/api/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, "wrong but long enough password"), trustedOrigin, nil)
@@ -124,9 +116,22 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 	if loginResult.Code != http.StatusOK {
 		t.Fatalf("login status = %d, body=%s", loginResult.Code, loginResult.Body.String())
 	}
+	var loginResponse struct {
+		Name string `json:"name"`
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal(loginResult.Body.Bytes(), &loginResponse); err != nil || loginResponse.Name != "Integration User" || loginResponse.Role != "USER" {
+		t.Fatalf("login response identity = %+v err=%v", loginResponse, err)
+	}
+	if strings.Contains(loginResult.Body.String(), "password_hash") {
+		t.Fatal("login response exposed password hash metadata")
+	}
 	cookies := loginResult.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].Value == "" {
 		t.Fatalf("unexpected localhost session cookie policy: %+v", cookies)
+	}
+	if strings.Contains(loginResult.Body.String(), cookies[0].Value) {
+		t.Fatal("login response exposed the session secret in its body")
 	}
 	tokenHash := sha256.Sum256([]byte(cookies[0].Value))
 	var storedHash []byte
@@ -144,7 +149,7 @@ func TestAuthenticationAgainstPostgreSQL(t *testing.T) {
 	me := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	me.AddCookie(cookies[0])
 	meResult := performHTTP(t, server, me)
-	if meResult.Code != http.StatusOK || !strings.Contains(meResult.Body.String(), email) || strings.Contains(meResult.Body.String(), "password_hash") {
+	if meResult.Code != http.StatusOK || !strings.Contains(meResult.Body.String(), email) || !strings.Contains(meResult.Body.String(), `"name":"Integration User"`) || !strings.Contains(meResult.Body.String(), `"role":"USER"`) || strings.Contains(meResult.Body.String(), "password_hash") || strings.Contains(meResult.Body.String(), cookies[0].Value) {
 		t.Fatalf("current-user response = %d, %s", meResult.Code, meResult.Body.String())
 	}
 

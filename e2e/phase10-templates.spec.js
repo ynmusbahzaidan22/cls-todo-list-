@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { expect, test } from "@playwright/test";
-import { getTestDatabaseURL } from "./test-database.js";
+import { getTestDatabaseURL, registerEmailRateLimitCleanup } from "./test-database.js";
 
 const testDatabaseURL = getTestDatabaseURL();
 test.describe.configure({ mode: "serial" });
@@ -10,9 +10,11 @@ test.describe.configure({ mode: "serial" });
 const baseURL = process.env.PHASE8_BASE_URL || "http://127.0.0.1:18080";
 const prefix = `phase10-template-e2e-${randomUUID().replaceAll("-", "").slice(0, 14)}`;
 const password = `Phase10-${randomUUID()}!`;
-const accountA = { email: `${prefix}-a@example.test`, password };
-const accountB = { email: `${prefix}-b@example.test`, password };
-const accountC = { email: `${prefix}-c@example.test`, password };
+const accountA = { name: "Template User A", email: `${prefix}-a@example.test`, password };
+const accountB = { name: "Template User B", email: `${prefix}-b@example.test`, password };
+const accountC = { name: "Template User C", email: `${prefix}-c@example.test`, password };
+const testClientIP = registerEmailRateLimitCleanup(test, [accountA.email, accountB.email, accountC.email]);
+test.use({ extraHTTPHeaders: { "X-Forwarded-For": testClientIP } });
 let pool;
 
 async function database() {
@@ -23,7 +25,7 @@ async function database() {
 }
 
 async function register(account) {
-  const response = await fetch(`${baseURL}/api/auth/register`, { method: "POST", headers: { "Content-Type": "application/json", Origin: baseURL }, body: JSON.stringify(account) });
+  const response = await fetch(`${baseURL}/api/auth/register`, { method: "POST", headers: { "Content-Type": "application/json", Origin: baseURL, "X-Forwarded-For": testClientIP }, body: JSON.stringify(account) });
   if (response.status !== 202) throw new Error(`Could not create isolated Phase 10 account (${response.status}).`);
 }
 

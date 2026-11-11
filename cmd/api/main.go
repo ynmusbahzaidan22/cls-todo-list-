@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/admin"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/auth"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/config"
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/database"
@@ -74,12 +75,15 @@ func run() error {
 	templateService := task.NewTemplateService(repository.NewTemplateRepository(pool))
 	templateAPI := httpapi.NewTemplateHandlers(templateService)
 	preferencesAPI := httpapi.NewPreferenceHandlers(repository.NewPreferenceRepository(pool))
+	adminService := admin.NewService(repository.NewAdminRepository(pool), cfg.TaskCursorSigningKey)
+	adminAPI := httpapi.NewAdminHandlers(adminService)
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.NewRouter(health.NewService(pool), logger, ".", httpapi.RouterOptions{
 			Auth:              authAPI,
 			Tasks:             taskAPI,
+			Admin:             adminAPI,
 			Templates:         templateAPI,
 			Preferences:       preferencesAPI,
 			TrustedOrigin:     cfg.TrustedOrigin,
@@ -100,7 +104,9 @@ func run() error {
 
 	shutdownContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go repository.RunMaintenance(shutdownContext, pool, logger)
+	maintenanceDone := startMaintenanceWorker(shutdownContext, cfg.PlaywrightTestMode, func(ctx context.Context) {
+		repository.RunMaintenance(ctx, pool, logger)
+	})
 
 	select {
 	case err := <-serverErrors:
@@ -120,5 +126,21 @@ func run() error {
 		}
 		logger.Info("HTTP server stopped")
 	}
+	stop()
+	if maintenanceDone != nil {
+		<-maintenanceDone
+	}
 	return nil
+}
+
+func startMaintenanceWorker(ctx context.Context, disabled bool, worker func(context.Context)) <-chan struct{} {
+	if disabled {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker(ctx)
+	}()
+	return done
 }
