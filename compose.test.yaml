@@ -1,0 +1,28 @@
+name: todo-list-test
+
+services:
+  postgres-test:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${TEST_POSTGRES_DB:?Set TEST_POSTGRES_DB in .env.test}
+      POSTGRES_USER: ${TEST_POSTGRES_USER:?Set TEST_POSTGRES_USER in .env.test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:?Set TEST_POSTGRES_PASSWORD in .env.test}
+    ports:
+      - "127.0.0.1:25432:5432"
+    volumes:
+      - postgres-test-data:/var/lib/postgresql
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres-test-data:
+
+networks:
+  test-network:

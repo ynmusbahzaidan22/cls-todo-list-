@@ -1,52 +1,446 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f5f7fa">
-    <title>My To-Do List</title>
+    <meta name="description" content="Sign in to your personal task workspace.">
+    <title>Sign in | My To-Do List</title>
     <link rel="stylesheet" href="style.css">
     <script src="script.js" defer></script>
   </head>
-  <body>
-    <!-- الحاوية الرئيسية تحدد محتوى التطبيق وعنوانه الدلالي. -->
-    <main class="app-shell">
-      <section class="todo-card" aria-labelledby="page-title">
-        <header class="app-header">
-          <h1 id="page-title">My To-Do List</h1>
-        </header>
+  <body class="auth-page">
+    <main class="app-shell auth-shell">
+      <section class="auth-card auth-loading" id="checking-view" aria-labelledby="checking-title" role="status">
+        <div class="brand-lockup" aria-hidden="true">
+          <span class="brand-mark"><span></span></span>
+          <span class="brand-name">My To-Do List</span>
+        </div>
+        <div class="loading-indicator" aria-hidden="true"></div>
+        <h1 id="checking-title">Checking your session</h1>
+        <p class="auth-intro">Just a moment while we securely reconnect you.</p>
+      </section>
 
-        <!-- النموذج يستقبل المهمة ويتيح إضافتها بالزر أو بزر Enter. -->
-        <form class="task-form" id="task-form">
+      <section class="auth-card auth-recovery" id="session-error-view" aria-labelledby="session-error-title" hidden>
+        <div class="brand-lockup" aria-hidden="true">
+          <span class="brand-mark"><span></span></span>
+          <span class="brand-name">My To-Do List</span>
+        </div>
+        <div class="status-icon status-icon-error" aria-hidden="true">!</div>
+        <h1 id="session-error-title">We couldn't check your session</h1>
+        <p class="auth-intro">Your sign-in status is unknown. Check your connection and try again.</p>
+        <button class="auth-submit" id="retry-session-button" type="button">Try again</button>
+      </section>
+
+      <section class="auth-card" id="auth-view" aria-labelledby="auth-title" hidden>
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span class="brand-name">My To-Do List</span>
+        </div>
+
+        <div class="auth-heading">
+          <p class="eyebrow">YOUR PERSONAL WORKSPACE</p>
+          <h1 id="auth-title">Welcome back</h1>
+          <p class="auth-intro" id="auth-intro">Sign in to pick up where you left off.</p>
+        </div>
+
+        <div class="auth-tabs" role="group" aria-label="Choose an account action">
+          <button class="auth-tab is-active" type="button" data-auth-mode="login" aria-pressed="true">Sign in</button>
+          <button class="auth-tab" type="button" data-auth-mode="register" aria-pressed="false">Create account</button>
+        </div>
+
+        <p class="auth-feedback" id="auth-feedback" role="status" aria-live="polite" hidden></p>
+
+        <form class="auth-form" id="login-form" novalidate>
+          <div class="field-group">
+            <label class="field-label" for="login-email">Email address</label>
+            <input class="auth-input" id="login-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required aria-describedby="login-email-error">
+            <p class="field-error" id="login-email-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="login-password">Password</label>
+            <input class="auth-input" id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required aria-describedby="login-password-error">
+            <p class="field-error" id="login-password-error"></p>
+          </div>
+          <button class="auth-submit" id="login-submit" type="submit"><span id="login-submit-label">Sign in</span><span aria-hidden="true">→</span></button>
+        </form>
+
+        <form class="auth-form" id="register-form" novalidate hidden>
+          <div class="field-group">
+            <label class="field-label" for="register-name">Name</label>
+            <input class="auth-input" id="register-name" name="name" type="text" autocomplete="name" placeholder="Your name" maxlength="100" required aria-describedby="register-name-hint register-name-error">
+            <p class="field-hint" id="register-name-hint">Use 1–100 characters.</p>
+            <p class="field-error" id="register-name-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="register-email">Email address</label>
+            <input class="auth-input" id="register-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required aria-describedby="register-email-error">
+            <p class="field-error" id="register-email-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="register-password">Password</label>
+            <input class="auth-input" id="register-password" name="password" type="password" autocomplete="new-password" placeholder="Create a password" required aria-describedby="register-password-hint register-password-error">
+            <p class="field-hint" id="register-password-hint">Use 12–128 characters.</p>
+            <p class="field-error" id="register-password-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="register-confirm-password">Confirm password</label>
+            <input class="auth-input" id="register-confirm-password" name="confirm-password" type="password" autocomplete="new-password" placeholder="Enter your password again" required aria-describedby="register-confirm-password-error">
+            <p class="field-error" id="register-confirm-password-error"></p>
+          </div>
+          <button class="auth-submit" id="register-submit" type="submit"><span id="register-submit-label">Create account</span><span aria-hidden="true">→</span></button>
+        </form>
+
+        <p class="auth-footnote">Your account is private to this local application.</p>
+      </section>
+
+      <section class="workspace-header" id="authenticated-view" aria-label="Signed-in account" hidden>
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <h1 class="brand-name" id="page-title" tabindex="-1">My To-Do List</h1>
+        </div>
+        <nav class="workspace-jump-links" aria-label="Task workspace sections">
+          <a href="#task-section" id="open-tasks">Tasks</a>
+          <a href="#template-section" id="open-templates">Task templates</a>
+          <a href="#completed" id="open-completed">Completed <span class="nav-count completed-nav-count" id="completed-task-count" hidden></span></a>
+        </nav>
+        <div class="workspace-account">
+          <p class="signed-in-email" id="signed-in-email"></p>
+          <button class="sign-out-button" id="logout-button" type="button">Sign out</button>
+        </div>
+        <p class="auth-feedback signed-in-feedback" id="logout-feedback" role="status" aria-live="polite" hidden></p>
+      </section>
+
+      <section class="todo-card" id="todo-view" aria-labelledby="page-title" hidden>
+        <section class="admin-account-panel" id="admin-account-panel" aria-labelledby="admin-account-title" hidden>
+          <h2 id="admin-account-title">Account administration</h2>
+          <p>Manage account roles and access. Changes revoke the affected account's existing sessions.</p>
+          <p id="admin-account-feedback" role="status" aria-live="polite"></p>
+          <div id="admin-account-loading" role="status" hidden>Loading accounts…</div>
+          <div id="admin-account-error" role="alert" hidden></div>
+          <div id="admin-account-list" class="admin-account-list" aria-busy="false"></div>
+        </section>
+        <details class="task-options timezone-preference" id="timezone-preference">
+          <summary class="task-options-summary">
+            <span class="task-options-summary-title">Time zone</span>
+            <span class="task-options-summary-hint" id="timezone-preference-summary">Using your device time zone</span>
+          </summary>
+          <form class="task-options-fields" id="timezone-preference-form" novalidate>
+            <div class="task-option-field">
+              <label class="input-label" for="timezone-override-input">Manual IANA time zone</label>
+              <input id="timezone-override-input" name="time_zone" type="text" maxlength="100" autocomplete="off" placeholder="America/New_York" aria-describedby="timezone-preference-help timezone-preference-feedback">
+              <p class="field-hint" id="timezone-preference-help">Leave this blank and choose “Use device time zone” to follow this browser. Dates remain calendar dates; the selected zone controls today and overdue calculations.</p>
+            </div>
+            <div class="form-actions">
+              <button class="secondary-button" id="save-timezone-override" type="submit">Save time zone</button>
+              <button class="secondary-button" id="use-device-timezone" type="button">Use device time zone</button>
+            </div>
+            <p class="activity-action-feedback" id="timezone-preference-feedback" role="status" aria-live="polite" hidden></p>
+          </form>
+        </details>
+        <div id="tasks-screen">
+
+        <form class="task-form" id="task-form" novalidate>
           <label class="input-label" for="task-input">New task</label>
           <div class="form-row">
-            <input
-              id="task-input"
-              name="task"
-              type="text"
-              placeholder="Add a task"
-              autocomplete="off"
-              aria-describedby="input-feedback"
-            >
+            <input id="task-input" name="task" type="text" placeholder="Add a task" autocomplete="off" maxlength="400" aria-describedby="input-feedback" required>
             <button class="add-button" type="submit">Add Task</button>
           </div>
+          <details class="task-options" id="task-options">
+            <summary class="task-options-summary">
+              <span class="task-options-summary-title">Add details</span>
+              <span class="task-options-summary-hint">Description, priority, due date</span>
+            </summary>
+            <div class="task-options-fields">
+              <div class="task-option-field">
+                <label class="input-label description-label" for="task-description-input">Description <span>(optional)</span></label>
+                <textarea class="task-description-input" id="task-description-input" name="description" rows="2" maxlength="20000" aria-describedby="input-feedback"></textarea>
+              </div>
+              <div class="task-option-metadata">
+                <div class="task-option-field">
+                  <label class="input-label" for="task-priority-input">Priority</label>
+                  <select id="task-priority-input" name="priority" class="task-priority-select">
+                    <option value="LOW">Low</option><option value="MEDIUM" selected>Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option>
+                  </select>
+                </div>
+                <div class="task-option-field">
+                  <label class="input-label" for="task-due-date-input">Due date <span>(optional)</span></label>
+                  <div class="form-row task-due-date-row">
+                    <input id="task-due-date-input" name="due_date" type="date" aria-describedby="due-date-help">
+                    <button class="secondary-button" id="clear-new-due-date" type="button">Clear date</button>
+                  </div>
+                  <p class="field-hint" id="due-date-help">A calendar date. Your selected time zone controls today and overdue calculations.</p>
+                </div>
+              </div>
+            </div>
+          </details>
           <p class="form-feedback" id="input-feedback" aria-live="polite" aria-atomic="true"></p>
         </form>
 
-        <!-- العنوان والملخص يتحدثان مع تغيّر عدد المهام وحالتها. -->
+        <p class="task-feedback" id="task-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+
         <div class="list-heading">
           <h2>Tasks</h2>
-          <p class="task-summary" id="task-summary" role="status" aria-live="polite"></p>
+          <p class="task-summary" id="task-summary" role="status" aria-live="polite" aria-atomic="true" hidden>
+            <span class="task-summary-metric"><strong id="task-shown-count">0</strong><span>shown</span></span>
+            <span class="task-summary-metric task-summary-completed"><strong id="task-completed-count">0</strong><span>completed</span></span>
+          </p>
         </div>
 
-        <!-- JavaScript يضيف عناصر القائمة هنا ويظهر الحالة الفارغة عند الحاجة. -->
-        <section class="task-section" aria-label="Your tasks">
-          <ul class="task-list" id="task-list" aria-describedby="task-summary"></ul>
-          <div class="empty-state" id="empty-state">
-            <p>No tasks yet. Add one to get started.</p>
+        <section class="task-section" id="task-section" aria-label="Your tasks">
+          <div class="task-filters" role="search" aria-label="Search and filter active tasks">
+            <div class="task-filter-toolbar">
+              <div class="task-searchbox">
+                <label class="sr-only" for="task-search">Search tasks</label>
+                <span class="task-search-icon" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" focusable="false"><circle cx="8.8" cy="8.8" r="5.6"></circle><path d="m13 13 4 4"></path></svg>
+                </span>
+                <input id="task-search" type="search" autocomplete="off" maxlength="400" aria-describedby="task-filter-help" placeholder="Search tasks by title or description">
+                <p class="sr-only" id="task-filter-help">Search active task titles and descriptions.</p>
+              </div>
+              <button class="task-filter-toggle" id="task-filter-toggle" type="button" aria-expanded="false" aria-controls="task-filter-panel">
+                  <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3 4h14l-5.5 6.2v5l-3 1.5v-6.5L3 4Z"></path></svg>
+                  <span>Filters</span>
+                  <span class="task-filter-count" id="task-filter-count" hidden></span>
+                  <svg class="task-filter-chevron" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m5 7.5 5 5 5-5"></path></svg>
+              </button>
+            </div>
+            <div class="task-filter-panel" id="task-filter-panel" hidden>
+              <div class="task-filter-panel-heading">
+                <div><h3>Refine your tasks</h3><p>Combine filters to narrow the list.</p></div>
+                <button class="task-filter-clear" id="clear-task-filters" type="button" hidden>Clear filters</button>
+              </div>
+              <div class="task-filter-field">
+                <label class="input-label" for="task-status-filter">Status</label>
+                <select id="task-status-filter" class="task-status-select">
+                  <option value="">All statuses</option><option value="TODO">To do</option>
+                  <option value="IN_PROGRESS">In progress</option><option value="DONE">Done</option>
+                </select>
+              </div>
+              <div class="task-filter-field">
+                <label class="input-label" for="task-priority-filter">Priority</label>
+                <select id="task-priority-filter" class="task-priority-select">
+                  <option value="">All priorities</option><option value="LOW">Low</option>
+                  <option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option>
+                </select>
+              </div>
+              <div class="task-filter-field">
+                <label class="input-label" for="task-due-filter">Due date</label>
+                <select id="task-due-filter">
+                  <option value="">Any due date</option><option value="overdue">Overdue</option>
+                  <option value="today">Due today</option><option value="upcoming">Upcoming</option><option value="none">No due date</option>
+                </select>
+                </div>
+            </div>
+            <div class="active-task-filters" id="active-task-filters" role="group" aria-label="Active filters" hidden></div>
           </div>
+          <div class="bulk-controls" id="bulk-controls" role="group" aria-label="Bulk task actions" hidden>
+            <div class="bulk-selection">
+              <label class="bulk-select-all"><input id="select-all-visible" type="checkbox"> Select all visible</label>
+              <span class="bulk-selection-count" id="bulk-selection-count" role="status" aria-live="polite">0 selected</span>
+            </div>
+            <div class="bulk-actions" id="bulk-actions" role="group" aria-label="Actions for selected tasks" hidden>
+              <label class="bulk-status-label visually-hidden" for="bulk-status">Status for selected tasks</label>
+              <select id="bulk-status" class="task-status-select">
+                <option value="TODO">To do</option>
+                <option value="IN_PROGRESS">In progress</option>
+                <option value="DONE">Done</option>
+              </select>
+              <button class="primary-button" id="bulk-apply-status" type="button">Apply status</button>
+              <button class="delete-button bulk-delete-button" id="bulk-delete" type="button">Delete selected</button>
+            </div>
+          </div>
+          <div class="task-loading" id="task-loading" role="status" aria-live="polite" hidden>
+            <span class="loading-indicator" aria-hidden="true"></span>
+            <span>Loading your tasks…</span>
+          </div>
+          <div class="task-load-error" id="task-load-error" role="alert" hidden>
+            <p id="task-load-error-message">We couldn't load your tasks.</p>
+            <button class="secondary-button" id="retry-task-load-button" type="button">Try again</button>
+          </div>
+          <ul class="task-list" id="task-list" aria-describedby="task-summary">
+            <li class="recently-completed-group" id="recently-completed-group" hidden>
+              <details class="recently-completed-details" id="recently-completed-details">
+                <summary>
+                  <span class="recently-completed-title">Recently completed</span>
+                  <span class="recently-completed-count" id="recently-completed-count">0</span>
+                  <span class="recently-completed-hint">Completed within the 12-hour review window</span>
+                  <span class="recently-completed-chevron" aria-hidden="true"></span>
+                </summary>
+                <ul class="task-list recently-completed-list" id="recently-completed-task-list" aria-label="Recently completed tasks"></ul>
+              </details>
+            </li>
+          </ul>
+          <div class="empty-state" id="empty-state" hidden>
+            <p id="empty-state-default">No tasks yet. Add one to get started.</p>
+            <p id="empty-state-search" hidden>No active tasks match your search.</p>
+            <p id="empty-state-status" hidden>No active tasks have this status.</p>
+            <p id="empty-state-search-status" hidden>No active tasks match your search and status.</p>
+            <p id="empty-state-filters" hidden>No active tasks match the selected filters.</p>
+          </div>
+          <p class="pagination-feedback" id="pagination-feedback" role="status" aria-live="polite" hidden></p>
+          <button class="secondary-button load-more-button" id="load-more-button" type="button" hidden>Load more tasks</button>
+        </section>
+
+        <section class="template-section" id="template-section" aria-labelledby="templates-title">
+          <div class="list-heading">
+            <h2 id="templates-title">Task templates</h2>
+            <button class="secondary-button" id="new-template-button" type="button">Create template</button>
+          </div>
+          <p class="template-feedback" id="template-feedback" role="status" aria-live="polite" hidden></p>
+          <p class="template-loading" id="template-loading" role="status" aria-live="polite" hidden>Loading templates…</p>
+          <p class="template-empty" id="template-empty" hidden>No templates yet. Create one to reuse a group of tasks.</p>
+          <ul class="template-list" id="template-list" aria-label="Your task templates"></ul>
+        </section>
+
+        <section class="deleted-preview-section" id="deleted-preview-section" aria-labelledby="deleted-preview-title" hidden>
+          <div class="deleted-preview-heading">
+            <div>
+              <h2 id="deleted-preview-title">Recently deleted <span class="deleted-preview-badge" id="deleted-task-count" hidden></span></h2>
+              <p class="deleted-preview-count" id="deleted-preview-count">Tasks can be restored for 24 hours.</p>
+            </div>
+            <button class="secondary-button" id="open-deleted-view" type="button" hidden>View all</button>
+          </div>
+          <p class="deleted-preview-status" id="deleted-preview-loading" role="status" aria-live="polite" hidden>Loading deleted tasks…</p>
+          <p class="deleted-preview-status" id="deleted-preview-error" role="alert" hidden>Couldn't load deleted tasks.</p>
+          <button class="secondary-button deleted-preview-retry" id="retry-deleted-preview" type="button" hidden>Try again</button>
+          <ul class="task-list deleted-preview-list" id="deleted-preview-list" aria-label="Recently deleted tasks"></ul>
+        </section>
+
+        <dialog class="activity-dialog template-dialog" id="template-editor-dialog" aria-labelledby="template-editor-title">
+          <form id="template-editor-form" novalidate>
+            <div class="activity-dialog-header"><div><p class="eyebrow">REUSABLE TASKS</p><h2 id="template-editor-title">Create template</h2></div><button class="dialog-close-button" id="template-editor-close" type="button" aria-label="Close template editor">×</button></div>
+            <label class="input-label" for="template-name">Template name</label>
+            <input id="template-name" type="text" maxlength="100" required>
+            <label class="input-label" for="template-description">Description <span>(optional)</span></label>
+            <textarea id="template-description" rows="2" maxlength="10000"></textarea>
+          <div class="list-heading"><h3>Items</h3><button class="secondary-button" id="add-template-item" type="button">Add item</button></div>
+          <section class="template-task-picker" id="template-task-picker" aria-labelledby="template-task-picker-title" hidden>
+            <div class="template-task-picker-heading"><h4 id="template-task-picker-title">Choose from your tasks</h4><button class="secondary-button" id="template-task-picker-close" type="button">Close</button></div>
+            <label class="input-label" for="template-task-picker-search">Search tasks</label>
+            <input id="template-task-picker-search" type="search" maxlength="200" placeholder="Search your active tasks" autocomplete="off">
+            <p class="field-hint">This copies the title, description, and priority. New tasks from a template start as To do; set due timing below.</p>
+            <p class="template-picker-loading" id="template-picker-loading" role="status" aria-live="polite" hidden>Loading your tasks…</p>
+            <p class="template-picker-error" id="template-picker-error" role="alert" hidden></p>
+            <p class="template-picker-empty" id="template-picker-empty" hidden>No matching active tasks. You can add a task manually.</p>
+            <ul class="template-picker-list" id="template-picker-list" aria-label="Tasks you can add to the template"></ul>
+            <button class="secondary-button template-picker-more" id="template-picker-more" type="button" hidden>Load more tasks</button>
+            <button class="secondary-button" id="template-add-manual" type="button">Add a task manually</button>
+          </section>
+            <p class="template-editor-error" id="template-editor-error" role="alert" hidden></p>
+          <p class="template-items-empty" id="template-items-empty">No items yet. Choose an existing task or add one manually.</p>
+            <div id="template-item-fields"></div>
+            <div class="template-dialog-actions"><button class="secondary-button" id="template-editor-cancel" type="button">Cancel</button><button class="primary-button" id="template-save-button" type="submit">Save template</button></div>
+          </form>
+        </dialog>
+
+        <dialog class="activity-dialog template-dialog" id="template-detail-dialog" aria-labelledby="template-detail-title">
+          <div class="activity-dialog-header"><div><p class="eyebrow">TASK TEMPLATE</p><h2 id="template-detail-title">Template details</h2><p id="template-detail-description"></p></div><button class="dialog-close-button" id="template-detail-close" type="button" aria-label="Close template details">×</button></div>
+          <ul class="template-detail-items" id="template-detail-items"></ul>
+          <p class="template-editor-error" id="template-detail-feedback" role="status" aria-live="polite" hidden></p>
+          <div class="template-dialog-actions"><button class="delete-button" id="template-detail-delete" type="button">Delete template</button><button class="secondary-button" id="template-detail-edit" type="button">Edit</button><button class="secondary-button" id="template-detail-new-set" type="button">Create new set</button><button class="primary-button" id="template-detail-apply" type="button">Use template</button></div>
+        </dialog>
+
+        <dialog class="bulk-confirm-dialog" id="template-apply-dialog" aria-labelledby="template-apply-title" aria-describedby="template-apply-description">
+          <h2 id="template-apply-title">Create tasks from template?</h2><p id="template-apply-description"></p>
+          <div class="bulk-confirm-actions"><button class="secondary-button" id="template-apply-cancel" type="button">Cancel</button><button class="primary-button" id="template-apply-confirm" type="button">Create tasks</button></div>
+        </dialog>
+
+        <dialog class="bulk-confirm-dialog" id="bulk-confirm-dialog" aria-labelledby="bulk-confirm-title" aria-describedby="bulk-confirm-description">
+          <h2 id="bulk-confirm-title">Delete selected tasks?</h2>
+          <p id="bulk-confirm-description"></p>
+          <div class="bulk-confirm-actions">
+            <button class="secondary-button" id="bulk-cancel-delete" type="button">Cancel</button>
+            <button class="delete-button" id="bulk-confirm-delete" type="button">Delete tasks</button>
+          </div>
+        </dialog>
+
+        </div>
+
+        <section class="recently-deleted-view" id="recently-deleted-section" aria-labelledby="recently-deleted-title" hidden>
+          <button class="secondary-button deleted-view-back" id="deleted-back-to-tasks" type="button">← Back to tasks</button>
+          <div class="deleted-view-heading">
+            <div>
+              <p class="eyebrow">TASK RECOVERY</p>
+              <h2 id="recently-deleted-title" tabindex="-1">Recently deleted</h2>
+              <p class="deleted-view-intro">Tasks can be restored for 24 hours after deletion.</p>
+            </div>
+            <span class="deleted-view-count" id="deleted-view-count"></span>
+          </div>
+          <p class="deleted-view-feedback" id="deleted-view-feedback" role="status" aria-live="polite" hidden></p>
+          <p class="activity-loading" id="deleted-loading" role="status" aria-live="polite" hidden>Loading recently deleted tasks…</p>
+          <div class="activity-error" id="deleted-load-error" role="alert" hidden>
+            <p id="deleted-load-error-message">We couldn't load recently deleted tasks.</p>
+            <button class="secondary-button" id="retry-deleted-load-button" type="button">Try again</button>
+          </div>
+          <p class="activity-empty" id="deleted-empty" hidden>No tasks have been deleted in the last 24 hours.</p>
+          <ul class="task-list deleted-task-list" id="deleted-task-list"></ul>
+          <p class="pagination-feedback" id="deleted-pagination-feedback" role="status" aria-live="polite" hidden></p>
+          <button class="secondary-button" id="deleted-more-button" type="button" hidden>Load more deleted tasks</button>
+        </section>
+
+        <section class="recently-deleted-view completed-tasks-view" id="completed-tasks-section" aria-labelledby="completed-tasks-title" hidden>
+          <button class="secondary-button deleted-view-back" id="completed-back-to-tasks" type="button">← Back to tasks</button>
+          <div class="completed-page-heading">
+            <div class="completed-title-group">
+              <h2 id="completed-tasks-title" tabindex="-1">Completed</h2>
+            </div>
+            <div class="completed-overview" aria-live="polite" aria-atomic="true">
+              <div class="completed-total"><strong id="completed-total-count">—</strong><span>total completed</span></div>
+              <div class="completed-shown"><strong id="completed-shown-count">0</strong><span>shown</span></div>
+            </div>
+          </div>
+          <div class="completed-toolbar" role="group" aria-label="Completed task filters">
+            <div class="completed-filter-copy">
+              <span class="completed-filter-icon" aria-hidden="true"></span>
+              <div><label for="completed-period-filter">Completion period</label><p>Choose the history range to review.</p></div>
+            </div>
+            <select id="completed-period-filter">
+              <option value="all">All time</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="year">This year</option>
+            </select>
+          </div>
+          <p class="activity-loading" id="completed-loading" role="status" aria-live="polite" hidden>Loading completed tasks…</p>
+          <div class="activity-error" id="completed-load-error" role="alert" hidden>
+            <p id="completed-load-error-message">We couldn't load completed tasks.</p>
+            <button class="secondary-button" id="retry-completed-load-button" type="button">Try again</button>
+          </div>
+          <p class="activity-empty" id="completed-empty" hidden>No archived tasks yet. Completed tasks move here after 12 hours.</p>
+          <ul class="task-list deleted-task-list" id="completed-task-list" aria-label="Completed tasks"></ul>
+          <p class="pagination-feedback" id="completed-pagination-feedback" role="status" aria-live="polite" hidden></p>
+          <button class="secondary-button" id="completed-more-button" type="button" hidden>View more</button>
         </section>
       </section>
+
+      <dialog class="activity-dialog" id="activity-dialog" aria-labelledby="activity-task-title">
+        <div class="activity-dialog-header">
+          <div>
+            <p class="eyebrow">TASK DETAILS</p>
+            <h2 id="activity-task-title">Task details</h2>
+          </div>
+          <button class="dialog-close-button" id="activity-close-button" type="button" aria-label="Close activity history">×</button>
+        </div>
+        <div class="activity-dialog-content" id="activity-dialog-content" aria-busy="false">
+          <h3 class="activity-history-heading">Activity history</h3>
+          <p class="activity-loading" id="activity-loading" role="status" aria-live="polite" hidden>Loading activity…</p>
+          <div class="activity-error" id="activity-error" role="alert" hidden>
+            <p id="activity-error-message">We couldn't load this task's history.</p>
+            <button class="secondary-button" id="activity-retry-button" type="button">Try again</button>
+          </div>
+          <p class="activity-action-feedback" id="activity-action-feedback" role="status" aria-live="polite" hidden></p>
+          <p class="activity-empty" id="activity-empty" hidden>No activity has been recorded for this task yet.</p>
+          <ol class="activity-list" id="activity-list" aria-label="Task activity events"></ol>
+          <button class="secondary-button activity-more-button" id="activity-more-button" type="button" hidden>Load older activity</button>
+        </div>
+        <div class="task-detail-footer" id="activity-task-footer">
+          <div class="task-detail-footer-actions">
+            <button class="secondary-button" id="activity-edit-task" type="button">Edit</button>
+            <button class="delete-button" id="activity-delete-task" type="button">Delete</button>
+          </div>
+        </div>
+      </dialog>
     </main>
   </body>
 </html>

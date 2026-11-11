@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    environment:
+      APP_ENV: production
+      HTTP_ADDR: 0.0.0.0:8080
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to a dedicated runtime role using sslmode=verify-full}
+      DATABASE_RUNTIME_ROLE: ${DATABASE_RUNTIME_ROLE:?Set DATABASE_RUNTIME_ROLE to the dedicated runtime role}
+      TASK_CURSOR_SIGNING_KEY: ${TASK_CURSOR_SIGNING_KEY:?Set TASK_CURSOR_SIGNING_KEY to 64 random hexadecimal characters}
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-10}
+      TRUSTED_ORIGIN: ${TRUSTED_ORIGIN:?Set TRUSTED_ORIGIN to the public HTTPS origin}
+      SESSION_COOKIE_SECURE: "true"
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?Set the exact reverse-proxy peer CIDR}
+    ports:
+      - target: 8080
+        published: ${APP_HTTP_PORT:-8080}
+        host_ip: 127.0.0.1
+        protocol: tcp
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "/app/todo-api", "healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
