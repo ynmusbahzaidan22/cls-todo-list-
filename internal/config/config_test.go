@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -89,7 +90,7 @@ func TestLoadUsesConfiguredTaskCursorSigningKey(t *testing.T) {
 func TestLoadValidProductionConfiguration(t *testing.T) {
 	values := map[string]string{
 		"APP_ENV": "production", "HTTP_ADDR": "0.0.0.0:8080",
-		"DATABASE_URL":          "postgres://todo_runtime:secret@db.example.test/todo?sslmode=verify-full",
+		"DATABASE_URL":          "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full",
 		"DATABASE_RUNTIME_ROLE": "todo_runtime",
 		"TRUSTED_ORIGIN":        "https://todo.example.test", "SESSION_COOKIE_SECURE": "true",
 		"TRUSTED_PROXY_CIDRS":     "127.0.0.1/32, 10.0.0.0/8",
@@ -104,6 +105,112 @@ func TestLoadValidProductionConfiguration(t *testing.T) {
 	}
 	if len(cfg.TaskCursorSigningKey) != 32 {
 		t.Fatalf("task cursor signing key length = %d, want 32", len(cfg.TaskCursorSigningKey))
+	}
+}
+
+func TestProductionDatabaseURLRejectsAmbiguousOrOverriddenSettings(t *testing.T) {
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", "")
+	tests := []struct {
+		name string
+		dsn  string
+		role string
+	}{
+		{name: "missing TLS mode", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo", role: "todo_runtime"},
+		{name: "TLS disabled", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=disable", role: "todo_runtime"},
+		{name: "TLS allow is not verified", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=allow", role: "todo_runtime"},
+		{name: "TLS prefer is not verified", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=prefer", role: "todo_runtime"},
+		{name: "TLS require does not verify identity", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=require", role: "todo_runtime"},
+		{name: "TLS verify ca does not verify hostname", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-ca", role: "todo_runtime"},
+		{name: "unknown TLS mode", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=custom", role: "todo_runtime"},
+		{name: "verify full then disable", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&sslmode=disable", role: "todo_runtime"},
+		{name: "disable then verify full", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=disable&sslmode=verify-full", role: "todo_runtime"},
+		{name: "duplicate identical TLS mode", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&sslmode=verify-full", role: "todo_runtime"},
+		{name: "encoded duplicate TLS parameter", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&%73slmode=disable", role: "todo_runtime"},
+		{name: "case-variant TLS parameter", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&SSLMode=disable", role: "todo_runtime"},
+		{name: "empty TLS mode", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=", role: "todo_runtime"},
+		{name: "TLS alias", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&ssl=true", role: "todo_runtime"},
+		{name: "query user override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&user=other", role: "todo_runtime"},
+		{name: "query host override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&host=other.example.test", role: "todo_runtime"},
+		{name: "query host address override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&hostaddr=192.0.2.4", role: "todo_runtime"},
+		{name: "query port override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&port=5433", role: "todo_runtime"},
+		{name: "query database override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&database=other", role: "todo_runtime"},
+		{name: "query database alias override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&dbname=other", role: "todo_runtime"},
+		{name: "query password override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&password=other", role: "todo_runtime"},
+		{name: "query passfile override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&passfile=/tmp/credentials", role: "todo_runtime"},
+		{name: "service file override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&servicefile=/tmp/service.conf", role: "todo_runtime"},
+		{name: "service override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&service=production", role: "todo_runtime"},
+		{name: "startup options override", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full&options=-c%20role%3Dother", role: "todo_runtime"},
+		{name: "runtime role mismatch", dsn: "postgres://other:secret@db.example.test:5432/todo?sslmode=verify-full", role: "todo_runtime"},
+		{name: "missing explicit port", dsn: "postgres://todo_runtime:secret@db.example.test/todo?sslmode=verify-full", role: "todo_runtime"},
+		{name: "missing explicit password", dsn: "postgres://todo_runtime@db.example.test:5432/todo?sslmode=verify-full", role: "todo_runtime"},
+		{name: "encoded database path", dsn: "postgres://todo_runtime:secret@db.example.test:5432/%74odo?sslmode=verify-full", role: "todo_runtime"},
+		{name: "malformed query", dsn: "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full;user=other", role: "todo_runtime"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseProductionDatabaseConfig(test.dsn, test.role, os.LookupEnv); err == nil {
+				t.Fatal("ambiguous or unsafe production database URL was accepted")
+			} else if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "db.example.test") {
+				t.Fatal("database URL validation error exposed connection details")
+			}
+		})
+	}
+}
+
+func TestProductionDatabaseConfigRejectsAmbientPGServiceSettings(t *testing.T) {
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseProductionDatabaseConfig(
+				"postgres://todo_runtime:url-secret@db.example.test:5432/todo?sslmode=verify-full",
+				"todo_runtime",
+				mapLookup(map[string]string{name: "configured"}),
+			); err == nil {
+				t.Fatal("production database configuration accepted ambient service settings")
+			} else if strings.Contains(err.Error(), "url-secret") || strings.Contains(err.Error(), "db.example.test") {
+				t.Fatal("database URL validation error exposed connection details")
+			}
+		})
+	}
+}
+
+func TestProductionDatabaseConfigUsesVerifiedEffectivePGXConfiguration(t *testing.T) {
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", "")
+	t.Setenv("PGHOST", "environment-host.example.test")
+	t.Setenv("PGPORT", "6432")
+	t.Setenv("PGUSER", "environment-user")
+	t.Setenv("PGPASSWORD", "environment-password")
+	t.Setenv("PGDATABASE", "environment-database")
+	t.Setenv("PGSSLMODE", "disable")
+	t.Setenv("PGOPTIONS", "")
+
+	config, err := parseProductionDatabaseConfig(
+		"postgres://todo_runtime:url-secret@db.example.test:5432/todo?sslmode=verify-full&sslrootcert=system&application_name=todo-api",
+		"todo_runtime",
+		os.LookupEnv,
+	)
+	if err != nil {
+		t.Fatalf("valid production database configuration was rejected: %v", err)
+	}
+	connection := config.ConnConfig
+	if connection.Host != "db.example.test" || connection.Port != 5432 || connection.Database != "todo" ||
+		connection.User != "todo_runtime" || connection.Password != "url-secret" || len(connection.Fallbacks) != 0 ||
+		connection.TLSConfig == nil || connection.TLSConfig.InsecureSkipVerify || connection.TLSConfig.ServerName != "db.example.test" {
+		t.Fatal("effective pgx identity or TLS configuration does not match the approved URL")
+	}
+}
+
+func TestProductionDatabaseConfigRejectsAmbientPGOptions(t *testing.T) {
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGSERVICEFILE", "")
+	t.Setenv("PGOPTIONS", "-c role=other")
+	if _, err := parseProductionDatabaseConfig(
+		"postgres://todo_runtime:url-secret@db.example.test:5432/todo?sslmode=verify-full",
+		"todo_runtime",
+		os.LookupEnv,
+	); err == nil {
+		t.Fatal("production database configuration accepted ambient PGOPTIONS")
 	}
 }
 

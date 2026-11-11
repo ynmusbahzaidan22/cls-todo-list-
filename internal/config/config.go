@@ -58,7 +58,12 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 
 	databaseURL := strings.TrimSpace(valueOr(lookup, "DATABASE_URL", ""))
-	if err := validateDatabaseURL(databaseURL); err != nil {
+	runtimeRole := strings.TrimSpace(valueOr(lookup, "DATABASE_RUNTIME_ROLE", ""))
+	if production {
+		if _, err := parseProductionDatabaseConfig(databaseURL, runtimeRole, lookup); err != nil {
+			return Config{}, err
+		}
+	} else if err := validateDatabaseURL(databaseURL); err != nil {
 		return Config{}, err
 	}
 	playwrightTestMode, err := validatePlaywrightTestMode(lookup, appEnv, databaseURL)
@@ -95,23 +100,11 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("TRUSTED_ORIGIN must use https when SESSION_COOKIE_SECURE is true")
 	}
 	if production {
-		parsedDB, _ := url.Parse(databaseURL)
-		if parsedDB.Query().Get("sslmode") != "verify-full" {
-			return Config{}, fmt.Errorf("production DATABASE_URL must set sslmode=verify-full")
-		}
 		if !secureCookie {
 			return Config{}, fmt.Errorf("SESSION_COOKIE_SECURE must be true when APP_ENV=production")
 		}
 		if !strings.HasPrefix(strings.ToLower(trustedOrigin), "https://") {
 			return Config{}, fmt.Errorf("production TRUSTED_ORIGIN must use https")
-		}
-		user := ""
-		if parsedDB.User != nil {
-			user = strings.ToLower(parsedDB.User.Username())
-		}
-		runtimeRole, _ := lookup("DATABASE_RUNTIME_ROLE")
-		if user == "" || !strings.EqualFold(user, strings.TrimSpace(runtimeRole)) {
-			return Config{}, fmt.Errorf("production DATABASE_URL username must match DATABASE_RUNTIME_ROLE")
 		}
 	}
 
@@ -284,4 +277,96 @@ func validateDatabaseURL(raw string) error {
 		return fmt.Errorf("DATABASE_URL must be a valid PostgreSQL URL with a host and database name")
 	}
 	return nil
+}
+
+// parseProductionDatabaseConfig validates the canonical URL and the effective
+// pgx configuration using pgx's parser. Production identity and TLS settings
+// must come from one explicit URL authority/path and a single verified mode.
+func parseProductionDatabaseConfig(raw, runtimeRole string, lookup func(string) (string, bool)) (*pgxpool.Config, error) {
+	invalid := func(reason string) (*pgxpool.Config, error) {
+		return nil, fmt.Errorf("production DATABASE_URL %s", reason)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Opaque != "" ||
+		parsed.Fragment != "" || parsed.ForceQuery || parsed.RawPath != "" || parsed.User == nil {
+		return invalid("is malformed or non-canonical")
+	}
+
+	password, hasPassword := parsed.User.Password()
+	user := parsed.User.Username()
+	host := parsed.Hostname()
+	portText := parsed.Port()
+	if !hasPassword || password == "" || user == "" {
+		return invalid("must provide an explicit user and password")
+	}
+	if host == "" || strings.Contains(host, ",") || strings.Contains(host, "%") {
+		return invalid("must provide one canonical host")
+	}
+	if portText == "" {
+		return invalid("must provide an explicit port")
+	}
+	if parsed.Path == "/" || !strings.HasPrefix(parsed.Path, "/") || strings.Contains(strings.TrimPrefix(parsed.Path, "/"), "/") {
+		return invalid("must provide one canonical database path")
+	}
+	if user != runtimeRole {
+		return invalid("URL user does not match DATABASE_RUNTIME_ROLE")
+	}
+	databaseName := strings.TrimPrefix(parsed.Path, "/")
+	portValue, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || portValue == 0 || strconv.FormatUint(portValue, 10) != portText {
+		return invalid("must use a canonical numeric port")
+	}
+
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return invalid("contains a malformed query")
+	}
+	values := make(map[string]string, len(query))
+	for key, occurrences := range query {
+		canonicalKey := strings.ToLower(key)
+		if key != canonicalKey || len(occurrences) != 1 {
+			return invalid("contains a duplicate or non-canonical query parameter")
+		}
+		if _, duplicate := values[canonicalKey]; duplicate {
+			return invalid("contains a query parameter that can override connection identity or TLS")
+		}
+		values[canonicalKey] = occurrences[0]
+		switch canonicalKey {
+		case "host", "hostaddr", "port", "user", "username", "database", "dbname",
+			"password", "passfile", "service", "servicefile", "ssl", "options",
+			"role", "session_authorization", "session_replication_role":
+			return invalid("contains a query-level connection identity or TLS override")
+		}
+	}
+	if values["sslmode"] != "verify-full" {
+		return invalid("must contain exactly one sslmode=verify-full parameter")
+	}
+
+	// pgx can load a service file before applying URL values. Reject ambient
+	// service configuration so it cannot add an unreviewed settings source.
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE"} {
+		if value, present := lookup(name); present && strings.TrimSpace(value) != "" {
+			return invalid("cannot use ambient PostgreSQL service configuration")
+		}
+	}
+
+	config, err := pgxpool.ParseConfig(raw)
+	if err != nil {
+		return invalid("could not be parsed by pgx")
+	}
+	connection := config.ConnConfig
+	if connection.Host != host || connection.Port != uint16(portValue) || connection.Database != databaseName ||
+		connection.User != runtimeRole || connection.Password != password || len(connection.Fallbacks) != 0 ||
+		connection.TLSConfig == nil || connection.TLSConfig.InsecureSkipVerify || connection.TLSConfig.ServerName != host {
+		return invalid("does not produce the expected effective pgx identity")
+	}
+	if _, hasOptions := connection.RuntimeParams["options"]; hasOptions {
+		return invalid("cannot use startup options")
+	}
+	for _, name := range []string{"role", "session_authorization", "session_replication_role"} {
+		if _, present := connection.RuntimeParams[name]; present {
+			return invalid("cannot change the effective session role")
+		}
+	}
+	return config, nil
 }
