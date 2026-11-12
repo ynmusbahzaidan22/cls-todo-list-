@@ -3,6 +3,43 @@
 // Authentication views share one explicit state so an unavailable API is not mistaken for logout.
 let authState = { status: "checking-session" };
 let authMode = "login";
+// Pure presentation helpers are kept in this classic script to preserve the API's static-file allowlist.
+function maskHeaderEmail(value) {
+  if (typeof value !== "string") return "•••@•••";
+  const email = value.trim();
+  const at = email.lastIndexOf("@");
+  if (at < 1 || at === email.length - 1) return "•••@•••";
+  const firstLocalCharacter = Array.from(email.slice(0, at))[0] || "•";
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  const candidateExtension = dot > 0 ? domain.slice(dot) : "";
+  const extension = /^\.[a-z\d-]{1,24}$/i.test(candidateExtension) ? candidateExtension : "";
+  return `${firstLocalCharacter}•••@•••${extension}`;
+}
+
+function togglePasswordVisibility(input, button) {
+  if (!input || !button || (input.type !== "password" && input.type !== "text")) return false;
+  const visible = input.type === "password";
+  input.type = visible ? "text" : "password";
+  button.setAttribute("aria-pressed", String(visible));
+  button.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+  button.classList?.toggle("is-visible", visible);
+  return visible;
+}
+
+function adminTaskViewModel(task) {
+  const validStatuses = new Set(["TODO", "IN_PROGRESS", "DONE"]);
+  const validPriorities = new Set(["LOW", "MEDIUM", "HIGH", "URGENT"]);
+  return {
+    title: typeof task?.title === "string" && task.title.trim() ? task.title : "Untitled task",
+    ownerName: typeof task?.owner_name === "string" && task.owner_name.trim() ? task.owner_name : "Unknown owner",
+    status: validStatuses.has(task?.status) ? task.status : "Unknown status",
+    priority: validPriorities.has(task?.priority) ? task.priority : "Unknown priority",
+    dueDate: typeof task?.due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.due_date) ? task.due_date : null,
+    deleted: Boolean(task?.deleted_at),
+  };
+}
+
 let currentUser = null;
 const DEVICE_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 let activeTimeZone = DEVICE_TIME_ZONE;
@@ -59,7 +96,13 @@ const adminAccountList = document.querySelector("#admin-account-list");
 const adminAccountLoading = document.querySelector("#admin-account-loading");
 const adminAccountError = document.querySelector("#admin-account-error");
 const adminAccountFeedback = document.querySelector("#admin-account-feedback");
+const adminAccountEmpty = document.querySelector("#admin-account-empty");
+const adminTaskList = document.querySelector("#admin-task-list");
+const adminTaskLoading = document.querySelector("#admin-task-loading");
+const adminTaskError = document.querySelector("#admin-task-error");
+const adminTaskEmpty = document.querySelector("#admin-task-empty");
 let adminAccountCursor = null;
+let adminTaskCursor = null;
 const loginSubmitLabel = document.querySelector("#login-submit-label");
 const registerSubmitLabel = document.querySelector("#register-submit-label");
 const signedInEmail = document.querySelector("#signed-in-email");
@@ -69,6 +112,7 @@ const timeZonePreferenceFeedback = document.querySelector("#timezone-preference-
 const useDeviceTimeZoneButton = document.querySelector("#use-device-timezone");
 const retrySessionButton = document.querySelector("#retry-session-button");
 const authTabs = [...document.querySelectorAll("[data-auth-mode]")];
+const passwordVisibilityToggles = [...document.querySelectorAll("[data-password-visibility-toggle]")];
 const authChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("todo-list-auth") : null;
 let workspaceScreen = window.location.hash === "#recently-deleted" ? "deleted" : window.location.hash === "#completed" ? "completed" : "tasks";
 
@@ -122,7 +166,7 @@ function renderAuthState() {
   const isSubmitting = status.startsWith("submitting-");
   for (const tab of authTabs) tab.disabled = isSubmitting;
   for (const input of authView.querySelectorAll("input")) input.disabled = isSubmitting;
-  for (const button of authView.querySelectorAll(".auth-submit")) button.disabled = isSubmitting;
+  for (const button of authView.querySelectorAll(".auth-submit, .password-visibility-toggle")) button.disabled = isSubmitting;
   loginForm.setAttribute("aria-busy", String(status === "submitting-login"));
   registerForm.setAttribute("aria-busy", String(status === "submitting-register"));
   loginSubmitLabel.textContent = status === "submitting-login" ? "Signing in…" : "Sign in";
@@ -131,7 +175,7 @@ function renderAuthState() {
   logoutButton.textContent = logoutButton.disabled ? "Signing out…" : "Sign out";
 
   if (status === "authenticated" || status === "submitting-logout" || errorContext === "logout") {
-    signedInEmail.textContent = currentUser?.email ?? "";
+    signedInEmail.textContent = maskHeaderEmail(currentUser?.email);
   }
   for (const link of workspaceJumpLinks.querySelectorAll("a")) {
     const active = (link.id === "open-completed" && workspaceScreen === "completed")
@@ -139,6 +183,13 @@ function renderAuthState() {
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
+}
+
+for (const button of passwordVisibilityToggles) {
+  button.addEventListener("click", () => {
+    const input = document.getElementById(button.getAttribute("aria-controls"));
+    togglePasswordVisibility(input, button);
+  });
 }
 
 function setAuthState(status, details = {}) {
@@ -254,9 +305,16 @@ function clearFieldErrors(form = null) {
 }
 
 function clearPasswordFields() {
+  for (const input of [loginPassword, registerPassword, registerConfirmPassword]) resetPasswordVisibility(input);
   loginPassword.value = "";
   registerPassword.value = "";
   registerConfirmPassword.value = "";
+}
+
+function resetPasswordVisibility(input) {
+  if (input?.type !== "text") return;
+  const button = passwordVisibilityToggles.find((candidate) => candidate.getAttribute("aria-controls") === input.id);
+  if (button) togglePasswordVisibility(input, button);
 }
 
 function validateEmail(input) {
@@ -442,6 +500,7 @@ async function submitLogin(event) {
     showAuthFeedback("We couldn't reach the sign-in service. Check your connection and try again.");
   } finally {
     loginPassword.value = "";
+    resetPasswordVisibility(loginPassword);
   }
 }
 
@@ -480,6 +539,8 @@ async function submitRegistration(event) {
   } finally {
     registerPassword.value = "";
     registerConfirmPassword.value = "";
+    resetPasswordVisibility(registerPassword);
+    resetPasswordVisibility(registerConfirmPassword);
   }
 }
 
@@ -1087,7 +1148,10 @@ async function initializeTaskWorkspace(user) {
   await loadTimeZonePreference(user.id, generation, preferenceGeneration);
   if (!taskIsCurrent(generation, user.id) || preferenceGeneration !== timeZoneRequestGeneration) return;
   void loadTasks(true);
-  if (user.role === "ADMIN") void loadAdminAccounts();
+  if (user.role === "ADMIN") {
+    void loadAdminAccounts();
+    void loadAdminTasks();
+  }
   void loadDeletedTaskCount();
   if (workspaceScreen === "deleted") void loadDeletedTasks(true);
   else void loadDeletedTasks(true, DELETED_PREVIEW_SIZE);
@@ -1105,6 +1169,7 @@ async function loadAdminAccounts(append = false, preserveFeedback = false) {
     if (!preserveFeedback) adminAccountFeedback.textContent = "";
   }
   adminAccountError.hidden = true;
+  adminAccountEmpty.hidden = true;
   adminAccountLoading.hidden = false;
   adminAccountList.setAttribute("aria-busy", "true");
   try {
@@ -1115,6 +1180,7 @@ async function loadAdminAccounts(append = false, preserveFeedback = false) {
     if (!response.ok || !Array.isArray(data?.items)) throw new Error("We couldn't load account administration.");
     for (const account of data.items) renderAdminAccount(account);
     adminAccountCursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
+    adminAccountEmpty.hidden = adminAccountList.querySelectorAll(".admin-account-row").length > 0 || Boolean(adminAccountCursor);
     adminAccountList.querySelector(".admin-load-more")?.remove();
     const more = document.createElement("button");
     more.type = "button";
@@ -1134,6 +1200,98 @@ async function loadAdminAccounts(append = false, preserveFeedback = false) {
     adminAccountLoading.hidden = true;
     adminAccountList.setAttribute("aria-busy", "false");
   }
+}
+
+async function loadAdminTasks(append = false) {
+  if (currentUser?.role !== "ADMIN") return false;
+  const actorId = currentUser.id;
+  const cursor = append ? adminTaskCursor : null;
+  if (!append) {
+    adminTaskCursor = null;
+    adminTaskList.replaceChildren();
+    adminTaskEmpty.hidden = true;
+  }
+  adminTaskError.hidden = true;
+  adminTaskLoading.hidden = false;
+  adminTaskList.setAttribute("aria-busy", "true");
+  try {
+    const query = new URLSearchParams({ limit: "100", state: "all" });
+    if (cursor) query.set("cursor", cursor);
+    const { response, data } = await taskRequest(`/api/admin/tasks?${query.toString()}`);
+    if (currentUser?.id !== actorId) return false;
+    if (!response.ok || !Array.isArray(data?.items)) throw new Error("Admin task listing unavailable.");
+    for (const task of data.items) renderAdminTask(task);
+    adminTaskCursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
+    adminTaskList.querySelector(".admin-task-load-more")?.remove();
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "secondary-button admin-task-load-more";
+    more.textContent = "Load more tasks";
+    more.hidden = !adminTaskCursor;
+    more.addEventListener("click", () => void loadAdminTasks(true));
+    adminTaskList.append(more);
+    const hasTasks = adminTaskList.querySelectorAll(".admin-task-card").length > 0;
+    adminTaskEmpty.hidden = hasTasks || Boolean(adminTaskCursor);
+    return true;
+  } catch {
+    if (currentUser?.id === actorId) {
+      adminTaskError.textContent = "Tasks are unavailable. Refresh and try again.";
+      adminTaskError.hidden = false;
+    }
+    return false;
+  } finally {
+    adminTaskLoading.hidden = true;
+    adminTaskList.setAttribute("aria-busy", "false");
+  }
+}
+
+function renderAdminTask(task) {
+  const summary = adminTaskViewModel(task);
+  const card = document.createElement("article");
+  card.className = "admin-task-card";
+
+  const top = document.createElement("div");
+  top.className = "admin-task-top";
+  const heading = document.createElement("div");
+  const title = document.createElement("h4");
+  title.className = "admin-task-title";
+  title.textContent = summary.title;
+  const owner = document.createElement("p");
+  owner.className = "admin-task-owner";
+  owner.textContent = `Owner: ${summary.ownerName}`;
+  heading.append(title, owner);
+
+  const state = document.createElement("div");
+  state.className = "admin-task-badges";
+  const status = document.createElement("span");
+  status.className = "admin-task-badge";
+  status.textContent = summary.status.replaceAll("_", " ");
+  state.append(status);
+  if (summary.deleted) {
+    const deleted = document.createElement("span");
+    deleted.className = "admin-task-badge admin-task-badge-muted";
+    deleted.textContent = "Deleted";
+    state.append(deleted);
+  }
+  top.append(heading, state);
+
+  const details = document.createElement("dl");
+  details.className = "admin-task-details";
+  const priority = document.createElement("div");
+  const priorityTerm = document.createElement("dt");
+  priorityTerm.textContent = "Priority";
+  const priorityValue = document.createElement("dd");
+  priorityValue.textContent = summary.priority;
+  priority.append(priorityTerm, priorityValue);
+  const dueDate = document.createElement("div");
+  const dueTerm = document.createElement("dt");
+  dueTerm.textContent = "Due date";
+  const dueValue = document.createElement("dd");
+  dueValue.textContent = summary.dueDate || "No due date";
+  dueDate.append(dueTerm, dueValue);
+  details.append(priority, dueDate);
+  card.append(top, details);
+  adminTaskList.append(card);
 }
 
 function renderAdminAccount(account) {
