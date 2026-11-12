@@ -83,17 +83,24 @@ func oneOf(value string, allowed ...string) bool {
 }
 
 type Status struct {
-	ActiveAdmins int64
-	GuardAdmins  int64
-	TargetExists bool
-	TargetActive bool
-	TargetRole   string
-	Eligible     bool
+	ActiveAdmins         int64
+	GuardAdmins          int64
+	TargetExists         bool
+	TargetActive         bool
+	TargetRole           string
+	Eligible             bool
+	TargetActiveSessions int64
 }
 
 type Repository interface {
 	Status(context.Context, string) (Status, error)
 	Bootstrap(context.Context, string) error
+}
+
+// SessionPreservingRepository supports the production bootstrap policy, which
+// keeps the selected owner's existing sessions intact as explicitly required.
+type SessionPreservingRepository interface {
+	BootstrapPreservingSessions(context.Context, string) error
 }
 
 type Service struct{ repository Repository }
@@ -118,4 +125,16 @@ func (s *Service) Bootstrap(ctx context.Context, rawEmail string) error {
 		return err
 	}
 	return s.repository.Bootstrap(ctx, email)
+}
+
+func (s *Service) BootstrapPreservingSessions(ctx context.Context, rawEmail string) error {
+	email, err := ValidateEmail(rawEmail)
+	if err != nil {
+		return err
+	}
+	repository, ok := s.repository.(SessionPreservingRepository)
+	if !ok {
+		return errors.New("repository does not support session-preserving bootstrap")
+	}
+	return repository.BootstrapPreservingSessions(ctx, email)
 }

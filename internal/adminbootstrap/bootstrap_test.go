@@ -7,10 +7,11 @@ import (
 )
 
 type fakeRepository struct {
-	status         Status
-	statusCalls    int
-	bootstrapCalls int
-	bootstrapErr   error
+	status          Status
+	statusCalls     int
+	bootstrapCalls  int
+	bootstrapErr    error
+	preservingCalls int
 }
 
 func (f *fakeRepository) Status(_ context.Context, _ string) (Status, error) {
@@ -19,6 +20,10 @@ func (f *fakeRepository) Status(_ context.Context, _ string) (Status, error) {
 }
 func (f *fakeRepository) Bootstrap(_ context.Context, _ string) error {
 	f.bootstrapCalls++
+	return f.bootstrapErr
+}
+func (f *fakeRepository) BootstrapPreservingSessions(_ context.Context, _ string) error {
+	f.preservingCalls++
 	return f.bootstrapErr
 }
 
@@ -84,6 +89,23 @@ func TestServiceCallsBootstrapOnlyForValidatedEmail(t *testing.T) {
 	}
 	if fake.bootstrapCalls != 1 {
 		t.Fatalf("bootstrap calls=%d", fake.bootstrapCalls)
+	}
+}
+
+func TestProductionBootstrapPreservesSessionsAndValidatesEmail(t *testing.T) {
+	fake := &fakeRepository{}
+	service := New(fake)
+	if err := service.BootstrapPreservingSessions(context.Background(), "Owner@example.test"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid email error=%v", err)
+	}
+	if fake.preservingCalls != 0 {
+		t.Fatal("invalid production bootstrap email reached repository")
+	}
+	if err := service.BootstrapPreservingSessions(context.Background(), "owner@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.preservingCalls != 1 || fake.bootstrapCalls != 0 {
+		t.Fatalf("production calls preserving=%d revoking=%d", fake.preservingCalls, fake.bootstrapCalls)
 	}
 }
 

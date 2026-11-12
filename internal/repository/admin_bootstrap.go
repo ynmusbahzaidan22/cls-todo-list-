@@ -23,6 +23,7 @@ func NewAdminBootstrapRepository(pool *pgxpool.Pool) *AdminBootstrapRepository {
 
 func (r *AdminBootstrapRepository) Status(ctx context.Context, email string) (adminbootstrap.Status, error) {
 	var status adminbootstrap.Status
+	var targetName string
 	err := r.pool.QueryRow(ctx, `
 		SELECT
 		  (SELECT count(*) FROM app.users WHERE role='ADMIN' AND status='ACTIVE'),
@@ -30,17 +31,27 @@ func (r *AdminBootstrapRepository) Status(ctx context.Context, email string) (ad
 		  (u.id IS NOT NULL),
 		  COALESCE(u.status='ACTIVE', false),
 	  COALESCE(u.role,''),
-	  (u.id IS NOT NULL AND u.status='ACTIVE' AND u.role='USER' AND char_length(btrim(u.name)) BETWEEN 1 AND 100)
+		  COALESCE(u.name,''),
+		  (SELECT count(*) FROM app.sessions s WHERE s.user_id=u.id AND s.revoked_at IS NULL)
 		FROM app.active_admin_guard AS g
 		LEFT JOIN app.users AS u ON ($1::text <> '' AND u.email=$1)
-		WHERE g.singleton=true`, email).Scan(&status.ActiveAdmins, &status.GuardAdmins, &status.TargetExists, &status.TargetActive, &status.TargetRole, &status.Eligible)
+		WHERE g.singleton=true`, email).Scan(&status.ActiveAdmins, &status.GuardAdmins, &status.TargetExists, &status.TargetActive, &status.TargetRole, &targetName, &status.TargetActiveSessions)
 	if err != nil {
 		return adminbootstrap.Status{}, fmt.Errorf("read bootstrap status")
 	}
+	status.Eligible = status.TargetExists && status.TargetActive && status.TargetRole == "USER" && strings.TrimSpace(targetName) != "" && len([]rune(targetName)) <= 100
 	return status, nil
 }
 
 func (r *AdminBootstrapRepository) Bootstrap(ctx context.Context, email string) (retErr error) {
+	return r.bootstrap(ctx, email, true)
+}
+
+func (r *AdminBootstrapRepository) BootstrapPreservingSessions(ctx context.Context, email string) error {
+	return r.bootstrap(ctx, email, false)
+}
+
+func (r *AdminBootstrapRepository) bootstrap(ctx context.Context, email string, revokeSessions bool) (retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
@@ -91,16 +102,23 @@ func (r *AdminBootstrapRepository) Bootstrap(ctx context.Context, email string) 
 	if _, err = tx.Exec(ctx, `UPDATE app.users SET role='ADMIN', updated_at=clock_timestamp() WHERE id=$1::uuid`, id); err != nil {
 		return errors.New("promote selected account")
 	}
-	var revoked int64
-	err = tx.QueryRow(ctx, `WITH changed AS (
-		UPDATE app.sessions SET revoked_at=clock_timestamp()
-		WHERE user_id=$1::uuid AND revoked_at IS NULL RETURNING 1
-	) SELECT count(*) FROM changed`, id).Scan(&revoked)
-	if err != nil {
-		return errors.New("revoke target sessions")
+	var sessionAuditKey string
+	var sessionsAfter int64
+	if revokeSessions {
+		err = tx.QueryRow(ctx, `WITH changed AS (
+			UPDATE app.sessions SET revoked_at=clock_timestamp()
+			WHERE user_id=$1::uuid AND revoked_at IS NULL RETURNING 1
+		) SELECT count(*) FROM changed`, id).Scan(&sessionsAfter)
+		if err != nil {
+			return errors.New("revoke target sessions")
+		}
+		sessionAuditKey = "revoked_sessions"
+	} else {
+		sessionsAfter = sessionsBefore
+		sessionAuditKey = "preserved_sessions"
 	}
 	before, _ := json.Marshal(map[string]any{"role": role, "status": status, "active_sessions": sessionsBefore})
-	after, _ := json.Marshal(map[string]any{"role": "ADMIN", "status": status, "revoked_sessions": revoked})
+	after, _ := json.Marshal(map[string]any{"role": "ADMIN", "status": status, sessionAuditKey: sessionsAfter})
 	if _, err = tx.Exec(ctx, `INSERT INTO app.admin_audit_events(actor_user_id,target_user_id,action,before_state,after_state)
 		VALUES (NULL,$1::uuid,'INITIAL_ADMIN_BOOTSTRAPPED',$2::jsonb,$3::jsonb)`, id, string(before), string(after)); err != nil {
 		return errors.New("write bootstrap audit event")
