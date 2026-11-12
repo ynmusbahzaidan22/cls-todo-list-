@@ -2,6 +2,12 @@
 
 This repository contains an HTML, CSS, and Vanilla JavaScript frontend with local login and registration, plus a Go HTTP API backed by PostgreSQL. The Go server serves the allowlisted frontend files and API from one origin, without exposing other repository files. Authenticated task management is connected to the backend API, with PostgreSQL as the source of truth. See [OPERATIONS.md](OPERATIONS.md) for database roles, production configuration, reverse proxy assumptions, backups, and recovery.
 
+## Production
+
+The live application is available at [https://cls-todo-list.onrender.com](https://cls-todo-list.onrender.com). It runs as a Docker web service on Render and uses Neon PostgreSQL. Production authentication uses same-origin, `HttpOnly`, `Secure`, `__Host-` cookies backed by server-side sessions; only session-token hashes are stored, with idle and absolute expiry. See [OPERATIONS.md](OPERATIONS.md) for the Render proxy assumptions and production configuration.
+
+Production smoke evidence (2026-11-12): a read-only HTTPS request to `/health/ready` returned HTTP 200 with certificate verification successful. The owner reported a successful manual browser check covering registration, login and logout, task persistence, user isolation, individual and template-based task creation, USER access to Admin returning 403, and the Admin dashboard. The manual browser results are owner-reported, not an automated test result. The readiness response does not identify the deployed source commit.
+
 ## Requirements
 
 - Go 1.26 or newer.
