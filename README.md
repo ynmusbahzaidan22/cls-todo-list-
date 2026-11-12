@@ -84,7 +84,8 @@ Down sections are migration-specific, not a general data reset. Migrations 002, 
 | `TASK_CURSOR_SIGNING_KEY` | Production | 64 hexadecimal characters | Stable 32-byte HMAC key used to sign active-task pagination cursors. |
 | `TRUSTED_ORIGIN` | No | `http://127.0.0.1:8080` | Exact browser origin permitted for state-changing requests. |
 | `SESSION_COOKIE_SECURE` | No locally; required for production | `false` locally, `true` in production | Production always requires Secure cookies and an HTTPS origin. |
-| `TRUSTED_PROXY_CIDRS` | Production | Empty locally | Exact reverse-proxy peer networks allowed to provide client IP forwarding headers. |
+| `TRUSTED_PROXY_CIDRS` | Production CIDR mode | Empty locally | Explicit reverse-proxy peer networks. Required in production unless verified Render mode is selected. |
+| `TRUSTED_PROXY_PROVIDER` | Production | Empty | Optional explicit provider mode. `render` is accepted only with verified Render web-service runtime metadata and cannot be combined with `TRUSTED_PROXY_CIDRS`. |
 | `POSTGRES_DB` | Compose/migrations | `todo_dev` | Local database name. |
 | `POSTGRES_USER` | Compose/migrations | `todo_dev` | Local database user. |
 | `POSTGRES_PASSWORD` | Compose/migrations | Set a local-only value | Local database password. |

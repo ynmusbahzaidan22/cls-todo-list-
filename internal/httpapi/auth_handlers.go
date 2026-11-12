@@ -178,7 +178,26 @@ func clientIP(r *http.Request) string {
 	if peerIP == nil {
 		return "unknown"
 	}
-	trusted, _ := r.Context().Value(trustedProxyContextKey{}).([]*net.IPNet)
+	proxy, _ := r.Context().Value(trustedProxyContextKey{}).(trustedProxyContextValue)
+	if proxy.provider == "render" {
+		// Render's public web-service guidance identifies CF-Connecting-IP as
+		// the client address supplied by its edge and overwritten by Cloudflare.
+		// Accept only one syntactically valid value; never trust user-supplied
+		// X-Forwarded-For in this provider mode.
+		values := r.Header.Values("CF-Connecting-IP")
+		if len(values) != 1 {
+			return peerIP.String()
+		}
+		forwarded := strings.TrimSpace(values[0])
+		if forwarded == "" || strings.ContainsAny(forwarded, ", \t\r\n") {
+			return peerIP.String()
+		}
+		if ip := net.ParseIP(forwarded); ip != nil {
+			return ip.String()
+		}
+		return peerIP.String()
+	}
+	trusted := proxy.cidrs
 	if !containsIP(trusted, peerIP) {
 		return peerIP.String()
 	}

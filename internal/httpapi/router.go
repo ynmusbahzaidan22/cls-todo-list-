@@ -25,14 +25,15 @@ type response struct {
 }
 
 type RouterOptions struct {
-	Auth              *AuthHandlers
-	Tasks             *TaskHandlers
-	Admin             *AdminHandlers
-	Templates         *TemplateHandlers
-	Preferences       *PreferenceHandlers
-	TrustedOrigin     string
-	TrustedProxyCIDRs []string
-	Production        bool
+	Auth                 *AuthHandlers
+	Tasks                *TaskHandlers
+	Admin                *AdminHandlers
+	Templates            *TemplateHandlers
+	Preferences          *PreferenceHandlers
+	TrustedOrigin        string
+	TrustedProxyCIDRs    []string
+	TrustedProxyProvider string
+	Production           bool
 }
 
 // NewRouter registers health, local authentication, and the explicitly allowed frontend files.
@@ -101,7 +102,7 @@ func NewRouter(checker readinessChecker, logger *slog.Logger, frontendDir string
 
 	var handler http.Handler = mux
 	if len(options) > 0 {
-		handler = trustedProxyContext(options[0].TrustedProxyCIDRs, handler)
+		handler = trustedProxyContextWithProvider(options[0].TrustedProxyProvider, options[0].TrustedProxyCIDRs, handler)
 		if options[0].Production {
 			handler = enforceHost(options[0].TrustedOrigin, handler)
 		}
@@ -120,7 +121,16 @@ func NewRouter(checker readinessChecker, logger *slog.Logger, frontendDir string
 
 type trustedProxyContextKey struct{}
 
+type trustedProxyContextValue struct {
+	provider string
+	cidrs    []*net.IPNet
+}
+
 func trustedProxyContext(cidrs []string, next http.Handler) http.Handler {
+	return trustedProxyContextWithProvider("", cidrs, next)
+}
+
+func trustedProxyContextWithProvider(provider string, cidrs []string, next http.Handler) http.Handler {
 	var trusted []*net.IPNet
 	for _, raw := range cidrs {
 		_, network, err := net.ParseCIDR(raw)
@@ -129,7 +139,7 @@ func trustedProxyContext(cidrs []string, next http.Handler) http.Handler {
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), trustedProxyContextKey{}, trusted)
+		ctx := context.WithValue(r.Context(), trustedProxyContextKey{}, trustedProxyContextValue{provider: provider, cidrs: trusted})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

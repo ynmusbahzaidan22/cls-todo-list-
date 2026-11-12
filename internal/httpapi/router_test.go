@@ -88,6 +88,51 @@ func TestTrustedProxyHeadersAndSecurityResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestRenderProxyClientIPUsesSingleVerifiedProviderHeader(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "10.0.0.2:443"
+	request.Header.Set("CF-Connecting-IP", "198.51.100.7")
+	request.Header.Set("X-Forwarded-For", "203.0.113.99")
+	wrapped := trustedProxyContextWithProvider("render", nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := clientIP(r); got != "198.51.100.7" {
+			t.Errorf("Render client IP = %q, want provider client address", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	result := httptest.NewRecorder()
+	wrapped.ServeHTTP(result, request)
+	if result.Code != http.StatusNoContent {
+		t.Fatalf("Render proxy request status = %d", result.Code)
+	}
+}
+
+func TestRenderProxyMalformedForwardedHeadersFallBackToPeer(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []string
+	}{
+		{name: "missing"},
+		{name: "invalid address", values: []string{"not-an-ip"}},
+		{name: "comma-separated chain", values: []string{"198.51.100.7, 10.0.0.1"}},
+		{name: "duplicate header values", values: []string{"198.51.100.7", "203.0.113.9"}},
+		{name: "empty address", values: []string{" "}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request.RemoteAddr = "10.0.0.2:443"
+			for _, value := range tt.values {
+				request.Header.Add("CF-Connecting-IP", value)
+			}
+			// X-Forwarded-For is never used as a fallback in Render mode.
+			request.Header.Set("X-Forwarded-For", "192.0.2.99")
+			if got := clientIP(request.WithContext(context.WithValue(request.Context(), trustedProxyContextKey{}, trustedProxyContextValue{provider: "render"}))); got != "10.0.0.2" {
+				t.Fatalf("malformed Render forwarded IP resolved to %q, want socket peer", got)
+			}
+		})
+	}
+}
+
 func TestProductionRejectsUnexpectedHostAndEnablesHSTS(t *testing.T) {
 	handler := NewRouter(nil, testLogger(), t.TempDir(), RouterOptions{TrustedOrigin: "https://todo.example.test", Production: true})
 	request := httptest.NewRequest(http.MethodGet, "https://attacker.example/", nil)

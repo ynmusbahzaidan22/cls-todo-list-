@@ -1,31 +1,45 @@
 \set ON_ERROR_STOP on
+BEGIN;
 \if :{?runtime_role}
 \else
 \set runtime_role todo_runtime
 \endif
+SELECT :'runtime_role' = 'todo_runtime' AS runtime_role_name_ok \gset
+\if :runtime_role_name_ok
+\else
+\echo Refusing to provision a role other than todo_runtime.
+\quit 3
+\endif
+
 SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS', :'runtime_role')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'runtime_role')
 \gexec
 
-SELECT format('ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS', :'runtime_role')
-\gexec
-
-SELECT format('REVOKE %I FROM %I CASCADE', parent.rolname, :'runtime_role')
-FROM pg_auth_members m
-JOIN pg_roles parent ON parent.oid=m.roleid
-JOIN pg_roles member ON member.oid=m.member
-WHERE member.rolname=:'runtime_role'
-\gexec
-
-SELECT CASE WHEN rolpassword IS NULL THEN 'true' ELSE 'false' END AS runtime_password_missing
-FROM pg_authid WHERE rolname = :'runtime_role' \gset
-\if :runtime_password_missing
-\echo Set an initial password for runtime role :runtime_role
-\prompt -s runtime_password "Enter password (input hidden): "
-SELECT format('ALTER ROLE %I PASSWORD %L', :'runtime_role', :'runtime_password')
-\gexec
-\unset runtime_password
+SELECT (
+  NOT EXISTS (
+    SELECT 1 FROM pg_roles
+    WHERE rolname = :'runtime_role'
+      AND rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolinherit
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  )
+  OR EXISTS (
+    SELECT 1 FROM pg_auth_members m
+    JOIN pg_roles member ON member.oid = m.member
+    WHERE member.rolname = :'runtime_role'
+  )
+) AS runtime_role_invalid \gset
+\if :runtime_role_invalid
+\echo Existing todo_runtime role has unsafe attributes or memberships; refusing to alter it.
+\quit 3
 \endif
+
+-- Set the password out of band with the provider's protected role-password
+-- workflow after this transaction. Never put a password in SQL or psql output.
 
 SELECT format('REVOKE CREATE, TEMPORARY ON DATABASE %I FROM PUBLIC CASCADE', current_database())
 \gexec
@@ -97,3 +111,4 @@ SELECT format('GRANT INSERT ON app.admin_audit_events TO %I', :'runtime_role')
 SELECT format('REVOKE ALL PRIVILEGES ON app.active_admin_guard FROM %I CASCADE', :'runtime_role')
 \gexec
 REVOKE CREATE ON SCHEMA app FROM PUBLIC;
+COMMIT;
