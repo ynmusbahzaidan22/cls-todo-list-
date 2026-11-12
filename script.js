@@ -3,7 +3,56 @@
 // Authentication views share one explicit state so an unavailable API is not mistaken for logout.
 let authState = { status: "checking-session" };
 let authMode = "login";
+// Pure presentation helpers are kept in this classic script to preserve the API's static-file allowlist.
+function maskHeaderEmail(value) {
+  if (typeof value !== "string") return "•••@•••";
+  const email = value.trim();
+  const at = email.lastIndexOf("@");
+  if (at < 1 || at === email.length - 1) return "•••@•••";
+  const firstLocalCharacter = Array.from(email.slice(0, at))[0] || "•";
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  const candidateExtension = dot > 0 ? domain.slice(dot) : "";
+  const extension = /^\.[a-z\d-]{1,24}$/i.test(candidateExtension) ? candidateExtension : "";
+  return `${firstLocalCharacter}•••@•••${extension}`;
+}
+
+function togglePasswordVisibility(input, button) {
+  if (!input || !button || (input.type !== "password" && input.type !== "text")) return false;
+  const visible = input.type === "password";
+  input.type = visible ? "text" : "password";
+  button.setAttribute("aria-pressed", String(visible));
+  button.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+  button.classList?.toggle("is-visible", visible);
+  return visible;
+}
+
+function adminTaskViewModel(task) {
+  const validStatuses = new Set(["TODO", "IN_PROGRESS", "DONE"]);
+  const validPriorities = new Set(["LOW", "MEDIUM", "HIGH", "URGENT"]);
+  return {
+    title: typeof task?.title === "string" && task.title.trim() ? task.title : "Untitled task",
+    ownerName: typeof task?.owner_name === "string" && task.owner_name.trim() ? task.owner_name : "Unknown owner",
+    status: validStatuses.has(task?.status) ? task.status : "Unknown status",
+    priority: validPriorities.has(task?.priority) ? task.priority : "Unknown priority",
+    dueDate: typeof task?.due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.due_date) ? task.due_date : null,
+    deleted: Boolean(task?.deleted_at),
+  };
+}
+
+function workspaceShowsTimeZone(screen) {
+  return screen === "tasks";
+}
+
 let currentUser = null;
+function workspaceScreenFromHash(hash) {
+  if (hash === "#recently-deleted") return "deleted";
+  if (hash === "#completed") return "completed";
+  if (hash === "#admin-users") return "admin-users";
+  if (hash === "#admin-tasks") return "admin-tasks";
+  return "tasks";
+}
+
 const DEVICE_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 let activeTimeZone = DEVICE_TIME_ZONE;
 let timeZoneRequestGeneration = 0;
@@ -41,6 +90,29 @@ const recentlyDeletedCountBadge = document.querySelector("#deleted-task-count");
 const recentlyDeletedViewCount = document.querySelector("#deleted-view-count");
 const recentlyDeletedViewFeedback = document.querySelector("#deleted-view-feedback");
 const backToTasksButton = document.querySelector("#deleted-back-to-tasks");
+const adminDashboardView = document.querySelector("#admin-dashboard-view");
+const adminUsersView = document.querySelector("#admin-users-view");
+const adminTasksView = document.querySelector("#admin-tasks-view");
+const adminUsersViewTitle = document.querySelector("#admin-users-view-title");
+const adminTasksViewTitle = document.querySelector("#admin-tasks-view-title");
+const adminUsersBackButton = document.querySelector("#admin-users-back");
+const adminTasksBackButton = document.querySelector("#admin-tasks-back");
+const adminViewAllUsersButton = document.querySelector("#admin-view-all-users");
+const adminViewAllTasksButton = document.querySelector("#admin-view-all-tasks");
+const adminUserSearchInput = document.querySelector("#admin-user-search-input");
+const adminUserPreviewList = document.querySelector("#admin-user-preview-list");
+const adminUserPreviewLoading = document.querySelector("#admin-user-preview-loading");
+const adminUserPreviewError = document.querySelector("#admin-user-preview-error");
+const adminUserPreviewEmpty = document.querySelector("#admin-user-preview-empty");
+const adminUserPreviewCount = document.querySelector("#admin-user-preview-count");
+const adminTaskPreviewList = document.querySelector("#admin-task-preview-list");
+const adminTaskPreviewLoading = document.querySelector("#admin-task-preview-loading");
+const adminTaskPreviewError = document.querySelector("#admin-task-preview-error");
+const adminTaskPreviewEmpty = document.querySelector("#admin-task-preview-empty");
+const adminTaskPreviewCount = document.querySelector("#admin-task-preview-count");
+const adminAccountCount = document.querySelector("#admin-account-count");
+const adminTaskCount = document.querySelector("#admin-task-count");
+const timeZonePreference = document.querySelector("#timezone-preference");
 const authTitle = document.querySelector("#auth-title");
 const authIntro = document.querySelector("#auth-intro");
 const authFeedback = document.querySelector("#auth-feedback");
@@ -59,7 +131,13 @@ const adminAccountList = document.querySelector("#admin-account-list");
 const adminAccountLoading = document.querySelector("#admin-account-loading");
 const adminAccountError = document.querySelector("#admin-account-error");
 const adminAccountFeedback = document.querySelector("#admin-account-feedback");
+const adminAccountEmpty = document.querySelector("#admin-account-empty");
+const adminTaskList = document.querySelector("#admin-task-list");
+const adminTaskLoading = document.querySelector("#admin-task-loading");
+const adminTaskError = document.querySelector("#admin-task-error");
+const adminTaskEmpty = document.querySelector("#admin-task-empty");
 let adminAccountCursor = null;
+let adminTaskCursor = null;
 const loginSubmitLabel = document.querySelector("#login-submit-label");
 const registerSubmitLabel = document.querySelector("#register-submit-label");
 const signedInEmail = document.querySelector("#signed-in-email");
@@ -69,8 +147,13 @@ const timeZonePreferenceFeedback = document.querySelector("#timezone-preference-
 const useDeviceTimeZoneButton = document.querySelector("#use-device-timezone");
 const retrySessionButton = document.querySelector("#retry-session-button");
 const authTabs = [...document.querySelectorAll("[data-auth-mode]")];
+const passwordVisibilityToggles = [...document.querySelectorAll("[data-password-visibility-toggle]")];
 const authChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("todo-list-auth") : null;
-let workspaceScreen = window.location.hash === "#recently-deleted" ? "deleted" : window.location.hash === "#completed" ? "completed" : "tasks";
+let workspaceScreen = workspaceScreenFromHash(window.location.hash);
+let adminUserSearchTimer = null;
+let adminAccountLoadGeneration = 0;
+let adminTaskLoadGeneration = 0;
+let adminPreviewLoadGeneration = 0;
 
 function announceSessionChange(type) {
   authChannel?.postMessage({ type });
@@ -107,6 +190,10 @@ function renderAuthState() {
   ].includes(status) && !(status === "recoverable-error" && errorContext === "logout");
   const workspaceVisible = !authenticatedView.hidden && Boolean(currentUser);
   adminAccountPanel.hidden = !workspaceVisible || currentUser?.role !== "ADMIN";
+  adminDashboardView.hidden = workspaceScreen !== "tasks";
+  adminUsersView.hidden = workspaceScreen !== "admin-users";
+  adminTasksView.hidden = workspaceScreen !== "admin-tasks";
+  timeZonePreference.hidden = !workspaceVisible || !workspaceShowsTimeZone(workspaceScreen);
   todoView.hidden = !workspaceVisible;
   tasksScreen.hidden = !workspaceVisible || workspaceScreen !== "tasks";
   recentlyDeletedScreen.hidden = !workspaceVisible || workspaceScreen !== "deleted";
@@ -122,7 +209,7 @@ function renderAuthState() {
   const isSubmitting = status.startsWith("submitting-");
   for (const tab of authTabs) tab.disabled = isSubmitting;
   for (const input of authView.querySelectorAll("input")) input.disabled = isSubmitting;
-  for (const button of authView.querySelectorAll(".auth-submit")) button.disabled = isSubmitting;
+  for (const button of authView.querySelectorAll(".auth-submit, .password-visibility-toggle")) button.disabled = isSubmitting;
   loginForm.setAttribute("aria-busy", String(status === "submitting-login"));
   registerForm.setAttribute("aria-busy", String(status === "submitting-register"));
   loginSubmitLabel.textContent = status === "submitting-login" ? "Signing in…" : "Sign in";
@@ -131,7 +218,7 @@ function renderAuthState() {
   logoutButton.textContent = logoutButton.disabled ? "Signing out…" : "Sign out";
 
   if (status === "authenticated" || status === "submitting-logout" || errorContext === "logout") {
-    signedInEmail.textContent = currentUser?.email ?? "";
+    signedInEmail.textContent = maskHeaderEmail(currentUser?.email);
   }
   for (const link of workspaceJumpLinks.querySelectorAll("a")) {
     const active = (link.id === "open-completed" && workspaceScreen === "completed")
@@ -141,6 +228,13 @@ function renderAuthState() {
   }
 }
 
+for (const button of passwordVisibilityToggles) {
+  button.addEventListener("click", () => {
+    const input = document.getElementById(button.getAttribute("aria-controls"));
+    togglePasswordVisibility(input, button);
+  });
+}
+
 function setAuthState(status, details = {}) {
   authState = { status, ...details };
   renderAuthState();
@@ -148,8 +242,17 @@ function setAuthState(status, details = {}) {
 
 function setWorkspaceScreen(screen, { replace = false, focus = true } = {}) {
   if (!currentUser) return;
-  workspaceScreen = screen === "deleted" ? "deleted" : screen === "completed" ? "completed" : "tasks";
-  const hash = workspaceScreen === "deleted" ? "#recently-deleted" : workspaceScreen === "completed" ? "#completed" : "#tasks";
+  const previousWorkspaceScreen = workspaceScreen;
+  const allowedScreens = ["tasks", "deleted", "completed", "admin-users", "admin-tasks"];
+  workspaceScreen = allowedScreens.includes(screen) ? screen : "tasks";
+  if (["admin-users", "admin-tasks"].includes(workspaceScreen) && currentUser.role !== "ADMIN") workspaceScreen = "tasks";
+  const hash = {
+    deleted: "#recently-deleted",
+    completed: "#completed",
+    "admin-users": "#admin-users",
+    "admin-tasks": "#admin-tasks",
+    tasks: "#tasks",
+  }[workspaceScreen];
   if (window.location.hash !== hash) {
     const method = replace ? "replaceState" : "pushState";
     window.history[method]({ workspaceScreen }, "", hash);
@@ -163,8 +266,15 @@ function setWorkspaceScreen(screen, { replace = false, focus = true } = {}) {
   } else if (workspaceScreen === "completed") {
     void loadCompletedTasks(true);
     if (focus) document.querySelector("#completed-tasks-title").focus({ preventScroll: true });
+  } else if (workspaceScreen === "admin-users") {
+    void loadAdminAccounts();
+    if (focus) adminUsersViewTitle.focus({ preventScroll: true });
+  } else if (workspaceScreen === "admin-tasks") {
+    void loadAdminTasks();
+    if (focus) adminTasksViewTitle.focus({ preventScroll: true });
   } else {
     void loadTasks(true);
+    if (["admin-users", "admin-tasks"].includes(previousWorkspaceScreen)) void loadAdminDashboardPreviews();
     if (focus) document.querySelector("#page-title").focus({ preventScroll: true });
   }
 }
@@ -186,14 +296,26 @@ workspaceJumpLinks.addEventListener("click", (event) => {
 });
 backToTasksButton.addEventListener("click", () => setWorkspaceScreen("tasks"));
 document.querySelector("#completed-back-to-tasks").addEventListener("click", () => setWorkspaceScreen("tasks"));
+adminViewAllUsersButton.addEventListener("click", () => setWorkspaceScreen("admin-users"));
+adminViewAllTasksButton.addEventListener("click", () => setWorkspaceScreen("admin-tasks"));
+adminUsersBackButton.addEventListener("click", () => setWorkspaceScreen("tasks"));
+adminTasksBackButton.addEventListener("click", () => setWorkspaceScreen("tasks"));
+adminUserSearchInput.addEventListener("input", () => {
+  clearTimeout(adminUserSearchTimer);
+  adminUserSearchTimer = setTimeout(() => void loadAdminAccounts(), 250);
+});
 window.addEventListener("popstate", () => {
-  workspaceScreen = window.location.hash === "#recently-deleted" ? "deleted" : window.location.hash === "#completed" ? "completed" : "tasks";
+  workspaceScreen = workspaceScreenFromHash(window.location.hash);
+  if (["admin-users", "admin-tasks"].includes(workspaceScreen) && currentUser?.role !== "ADMIN") workspaceScreen = "tasks";
   renderAuthState();
   if (workspaceScreen === "deleted" && currentUser) {
     void loadDeletedTaskCount();
     void loadDeletedTasks(true);
   }
   if (workspaceScreen === "completed" && currentUser) void loadCompletedTasks(true);
+  if (workspaceScreen === "admin-users" && currentUser) void loadAdminAccounts();
+  if (workspaceScreen === "admin-tasks" && currentUser) void loadAdminTasks();
+  if (workspaceScreen === "tasks" && currentUser?.role === "ADMIN") void loadAdminDashboardPreviews();
 });
 
 function setAuthMode(mode, { preserveFeedback = false } = {}) {
@@ -254,9 +376,16 @@ function clearFieldErrors(form = null) {
 }
 
 function clearPasswordFields() {
+  for (const input of [loginPassword, registerPassword, registerConfirmPassword]) resetPasswordVisibility(input);
   loginPassword.value = "";
   registerPassword.value = "";
   registerConfirmPassword.value = "";
+}
+
+function resetPasswordVisibility(input) {
+  if (input?.type !== "text") return;
+  const button = passwordVisibilityToggles.find((candidate) => candidate.getAttribute("aria-controls") === input.id);
+  if (button) togglePasswordVisibility(input, button);
 }
 
 function validateEmail(input) {
@@ -442,6 +571,7 @@ async function submitLogin(event) {
     showAuthFeedback("We couldn't reach the sign-in service. Check your connection and try again.");
   } finally {
     loginPassword.value = "";
+    resetPasswordVisibility(loginPassword);
   }
 }
 
@@ -480,6 +610,8 @@ async function submitRegistration(event) {
   } finally {
     registerPassword.value = "";
     registerConfirmPassword.value = "";
+    resetPasswordVisibility(registerPassword);
+    resetPasswordVisibility(registerConfirmPassword);
   }
 }
 
@@ -1087,7 +1219,13 @@ async function initializeTaskWorkspace(user) {
   await loadTimeZonePreference(user.id, generation, preferenceGeneration);
   if (!taskIsCurrent(generation, user.id) || preferenceGeneration !== timeZoneRequestGeneration) return;
   void loadTasks(true);
-  if (user.role === "ADMIN") void loadAdminAccounts();
+  if (user.role === "ADMIN") {
+    if (workspaceScreen === "admin-users") void loadAdminAccounts();
+    else if (workspaceScreen === "admin-tasks") void loadAdminTasks();
+    void loadAdminDashboardPreviews();
+  } else if (["admin-users", "admin-tasks"].includes(workspaceScreen)) {
+    setWorkspaceScreen("tasks", { replace: true, focus: false });
+  }
   void loadDeletedTaskCount();
   if (workspaceScreen === "deleted") void loadDeletedTasks(true);
   else void loadDeletedTasks(true, DELETED_PREVIEW_SIZE);
@@ -1095,9 +1233,61 @@ async function initializeTaskWorkspace(user) {
   void loadTemplates();
 }
 
-async function loadAdminAccounts(append = false, preserveFeedback = false) {
+async function loadAdminDashboardPreviews() {
   if (currentUser?.role !== "ADMIN") return;
   const actorId = currentUser.id;
+  const generation = ++adminPreviewLoadGeneration;
+  for (const element of [adminUserPreviewLoading, adminTaskPreviewLoading]) element.hidden = false;
+  adminUserPreviewError.hidden = true;
+  adminTaskPreviewError.hidden = true;
+  adminUserPreviewEmpty.hidden = true;
+  adminTaskPreviewEmpty.hidden = true;
+  const requests = [
+    taskRequest("/api/admin/users?limit=5"),
+    taskRequest("/api/admin/tasks?limit=5&state=all"),
+  ];
+  const [usersResult, tasksResult] = await Promise.allSettled(requests);
+  if (currentUser?.id !== actorId || generation !== adminPreviewLoadGeneration) return;
+  if (usersResult.status === "fulfilled" && usersResult.value.response.ok && Array.isArray(usersResult.value.data?.items)) {
+    const users = usersResult.value.data.items;
+    adminUserPreviewList.replaceChildren();
+    users.forEach((account) => renderAdminUserPreview(account));
+    adminUserPreviewCount.textContent = `${users.length} users shown`;
+    adminUserPreviewEmpty.hidden = users.length > 0;
+  } else {
+    adminUserPreviewError.hidden = false;
+    adminUserPreviewCount.textContent = "";
+  }
+  if (tasksResult.status === "fulfilled" && tasksResult.value.response.ok && Array.isArray(tasksResult.value.data?.items)) {
+    const tasks = tasksResult.value.data.items;
+    adminTaskPreviewList.replaceChildren();
+    tasks.forEach((task) => renderAdminTask(task, adminTaskPreviewList));
+    adminTaskPreviewCount.textContent = `${tasks.length} tasks shown`;
+    adminTaskPreviewEmpty.hidden = tasks.length > 0;
+  } else {
+    adminTaskPreviewError.hidden = false;
+    adminTaskPreviewCount.textContent = "";
+  }
+  adminUserPreviewLoading.hidden = true;
+  adminTaskPreviewLoading.hidden = true;
+}
+
+function renderAdminUserPreview(account) {
+  const card = document.createElement("article");
+  card.className = "admin-user-preview-card";
+  const name = document.createElement("strong");
+  name.textContent = account?.name || "Unnamed user";
+  const details = document.createElement("span");
+  details.textContent = `${account?.role === "ADMIN" ? "Admin" : "User"} · ${account?.status === "ACTIVE" ? "Active" : "Disabled"}`;
+  card.append(name, details);
+  adminUserPreviewList.append(card);
+}
+
+async function loadAdminAccounts(append = false, preserveFeedback = false) {
+  if (currentUser?.role !== "ADMIN" || workspaceScreen !== "admin-users") return false;
+  if (append && !adminAccountLoading.hidden) return false;
+  const actorId = currentUser.id;
+  const generation = append ? adminAccountLoadGeneration : ++adminAccountLoadGeneration;
   const cursor = append ? adminAccountCursor : null;
   if (!append) {
     adminAccountCursor = null;
@@ -1105,35 +1295,140 @@ async function loadAdminAccounts(append = false, preserveFeedback = false) {
     if (!preserveFeedback) adminAccountFeedback.textContent = "";
   }
   adminAccountError.hidden = true;
+  adminAccountEmpty.hidden = true;
   adminAccountLoading.hidden = false;
   adminAccountList.setAttribute("aria-busy", "true");
   try {
-    const query = new URLSearchParams({ limit: "100" });
+    const query = new URLSearchParams({ limit: "20", q: adminUserSearchInput.value.trim() });
     if (cursor) query.set("cursor", cursor);
     const { response, data } = await taskRequest(`/api/admin/users?${query.toString()}`);
-    if (currentUser?.id !== actorId) return false;
+    if (currentUser?.id !== actorId || generation !== adminAccountLoadGeneration) return false;
     if (!response.ok || !Array.isArray(data?.items)) throw new Error("We couldn't load account administration.");
     for (const account of data.items) renderAdminAccount(account);
     adminAccountCursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
+    const accountCount = adminAccountList.querySelectorAll(".admin-account-row").length;
+    adminAccountCount.textContent = `${accountCount} users shown${adminAccountCursor ? " · more available" : ""}`;
+    adminAccountEmpty.hidden = accountCount > 0 || Boolean(adminAccountCursor);
     adminAccountList.querySelector(".admin-load-more")?.remove();
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "secondary-button admin-load-more";
-    more.textContent = "Load more accounts";
-    more.hidden = !adminAccountCursor;
-    more.addEventListener("click", () => void loadAdminAccounts(true));
-    adminAccountList.append(more);
+    if (adminAccountCursor) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "secondary-button admin-load-more";
+      more.textContent = "Load more users";
+      more.addEventListener("click", () => void loadAdminAccounts(true));
+      adminAccountList.append(more);
+    }
     return true;
   } catch {
-    if (currentUser?.id === actorId) {
+    if (currentUser?.id === actorId && generation === adminAccountLoadGeneration) {
       adminAccountError.textContent = "Account administration is unavailable. Refresh and try again.";
       adminAccountError.hidden = false;
     }
     return false;
   } finally {
-    adminAccountLoading.hidden = true;
-    adminAccountList.setAttribute("aria-busy", "false");
+    if (generation === adminAccountLoadGeneration) {
+      adminAccountLoading.hidden = true;
+      adminAccountList.setAttribute("aria-busy", "false");
+    }
   }
+}
+
+async function loadAdminTasks(append = false) {
+  if (currentUser?.role !== "ADMIN" || workspaceScreen !== "admin-tasks") return false;
+  if (append && !adminTaskLoading.hidden) return false;
+  const actorId = currentUser.id;
+  const generation = append ? adminTaskLoadGeneration : ++adminTaskLoadGeneration;
+  const cursor = append ? adminTaskCursor : null;
+  if (!append) {
+    adminTaskCursor = null;
+    adminTaskList.replaceChildren();
+    adminTaskEmpty.hidden = true;
+  }
+  adminTaskError.hidden = true;
+  adminTaskLoading.hidden = false;
+  adminTaskList.setAttribute("aria-busy", "true");
+  try {
+    const query = new URLSearchParams({ limit: "20", state: "all" });
+    if (cursor) query.set("cursor", cursor);
+    const { response, data } = await taskRequest(`/api/admin/tasks?${query.toString()}`);
+    if (currentUser?.id !== actorId || generation !== adminTaskLoadGeneration) return false;
+    if (!response.ok || !Array.isArray(data?.items)) throw new Error("Admin task listing unavailable.");
+    for (const task of data.items) renderAdminTask(task);
+    adminTaskCursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
+    const taskCount = adminTaskList.querySelectorAll(".admin-task-card").length;
+    adminTaskCount.textContent = `${taskCount} tasks shown${adminTaskCursor ? " · more available" : ""}`;
+    adminTaskList.querySelector(".admin-task-load-more")?.remove();
+    if (adminTaskCursor) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "secondary-button admin-task-load-more";
+      more.textContent = "Load more tasks";
+      more.addEventListener("click", () => void loadAdminTasks(true));
+      adminTaskList.append(more);
+    }
+    adminTaskEmpty.hidden = taskCount > 0 || Boolean(adminTaskCursor);
+    return true;
+  } catch {
+    if (currentUser?.id === actorId && generation === adminTaskLoadGeneration) {
+      adminTaskError.textContent = "Tasks are unavailable. Refresh and try again.";
+      adminTaskError.hidden = false;
+    }
+    return false;
+  } finally {
+    if (generation === adminTaskLoadGeneration) {
+      adminTaskLoading.hidden = true;
+      adminTaskList.setAttribute("aria-busy", "false");
+    }
+  }
+}
+
+function renderAdminTask(task, list = adminTaskList) {
+  const summary = adminTaskViewModel(task);
+  const card = document.createElement("article");
+  card.className = "admin-task-card";
+
+  const top = document.createElement("div");
+  top.className = "admin-task-top";
+  const heading = document.createElement("div");
+  const title = document.createElement("h4");
+  title.className = "admin-task-title";
+  title.textContent = summary.title;
+  const owner = document.createElement("p");
+  owner.className = "admin-task-owner";
+  owner.textContent = `Owner: ${summary.ownerName}`;
+  heading.append(title, owner);
+
+  const state = document.createElement("div");
+  state.className = "admin-task-badges";
+  const status = document.createElement("span");
+  status.className = "admin-task-badge";
+  status.textContent = summary.status.replaceAll("_", " ");
+  state.append(status);
+  if (summary.deleted) {
+    const deleted = document.createElement("span");
+    deleted.className = "admin-task-badge admin-task-badge-muted";
+    deleted.textContent = "Deleted";
+    state.append(deleted);
+  }
+  top.append(heading, state);
+
+  const details = document.createElement("dl");
+  details.className = "admin-task-details";
+  const priority = document.createElement("div");
+  const priorityTerm = document.createElement("dt");
+  priorityTerm.textContent = "Priority";
+  const priorityValue = document.createElement("dd");
+  priorityValue.textContent = summary.priority;
+  priority.append(priorityTerm, priorityValue);
+  const dueDate = document.createElement("div");
+  const dueTerm = document.createElement("dt");
+  dueTerm.textContent = "Due date";
+  const dueValue = document.createElement("dd");
+  dueValue.textContent = summary.dueDate || "No due date";
+  dueDate.append(dueTerm, dueValue);
+  details.append(priority, dueDate);
+  card.append(top, details);
+  list.append(card);
 }
 
 function renderAdminAccount(account) {
@@ -1204,6 +1499,7 @@ async function performAdminMutation(userId, action, body) {
     if (!response.ok) throw new Error("The account change could not be completed.");
     const successMessage = action === "sessions/revoke" ? `Revoked ${data?.revoked_sessions ?? 0} active session(s).` : "Account updated. Its existing sessions were revoked.";
     const refreshed = await loadAdminAccounts(false, true);
+    void loadAdminDashboardPreviews();
     adminAccountFeedback.textContent = refreshed ? successMessage : "The account change succeeded, but the list could not be refreshed.";
   } catch (error) {
     adminAccountFeedback.textContent = error instanceof Error ? error.message : "The account change could not be completed.";

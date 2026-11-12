@@ -31,6 +31,7 @@ type Config struct {
 	TaskCursorSigningKey []byte
 	SessionCookieSecure  bool
 	TrustedProxyCIDRs    []string
+	TrustedProxyProvider string
 	PlaywrightTestMode   bool
 }
 
@@ -108,12 +109,28 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		}
 	}
 
+	proxyProvider := strings.TrimSpace(valueOr(lookup, "TRUSTED_PROXY_PROVIDER", ""))
 	proxyCIDRs, err := parseProxyCIDRs(valueOr(lookup, "TRUSTED_PROXY_CIDRS", ""))
 	if err != nil {
 		return Config{}, err
 	}
-	if production && len(proxyCIDRs) == 0 {
-		return Config{}, fmt.Errorf("TRUSTED_PROXY_CIDRS must identify the reverse proxy when APP_ENV=production")
+	switch proxyProvider {
+	case "":
+		if production && len(proxyCIDRs) == 0 {
+			return Config{}, fmt.Errorf("production requires TRUSTED_PROXY_CIDRS or a verified TRUSTED_PROXY_PROVIDER")
+		}
+	case "render":
+		if !production {
+			return Config{}, fmt.Errorf("TRUSTED_PROXY_PROVIDER=render is allowed only when APP_ENV=production")
+		}
+		if len(proxyCIDRs) != 0 {
+			return Config{}, fmt.Errorf("TRUSTED_PROXY_PROVIDER and TRUSTED_PROXY_CIDRS cannot both be configured")
+		}
+		if err := validateRenderProxyEnvironment(lookup, trustedOrigin); err != nil {
+			return Config{}, err
+		}
+	default:
+		return Config{}, fmt.Errorf("TRUSTED_PROXY_PROVIDER must be empty or render")
 	}
 	cursorKey, keyErr := parseTaskCursorSigningKey(valueOr(lookup, "TASK_CURSOR_SIGNING_KEY", ""), production)
 	if keyErr != nil {
@@ -130,8 +147,32 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		TaskCursorSigningKey: cursorKey,
 		SessionCookieSecure:  secureCookie,
 		TrustedProxyCIDRs:    proxyCIDRs,
+		TrustedProxyProvider: proxyProvider,
 		PlaywrightTestMode:   playwrightTestMode,
 	}, nil
+}
+
+func validateRenderProxyEnvironment(lookup func(string) (string, bool), trustedOrigin string) error {
+	if value, _ := lookup("RENDER"); value != "true" {
+		return fmt.Errorf("Render proxy mode requires RENDER=true")
+	}
+	if value, _ := lookup("RENDER_SERVICE_TYPE"); value != "web" {
+		return fmt.Errorf("Render proxy mode requires RENDER_SERVICE_TYPE=web")
+	}
+	if value, ok := lookup("RENDER_SERVICE_ID"); !ok || strings.TrimSpace(value) == "" {
+		return fmt.Errorf("Render proxy mode requires RENDER_SERVICE_ID")
+	}
+	if value, _ := lookup("RENDER_EXTERNAL_URL"); value == "" || value != trustedOrigin {
+		return fmt.Errorf("RENDER_EXTERNAL_URL must exactly match TRUSTED_ORIGIN")
+	}
+	origin, err := url.Parse(trustedOrigin)
+	if err != nil {
+		return fmt.Errorf("TRUSTED_ORIGIN is invalid for Render proxy mode")
+	}
+	if value, _ := lookup("RENDER_EXTERNAL_HOSTNAME"); value == "" || value != origin.Hostname() {
+		return fmt.Errorf("RENDER_EXTERNAL_HOSTNAME must exactly match the TRUSTED_ORIGIN hostname")
+	}
+	return nil
 }
 
 // validatePlaywrightTestMode permits disabling background maintenance only for

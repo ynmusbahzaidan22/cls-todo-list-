@@ -16,7 +16,7 @@ import (
 
 type AdminService interface {
 	ListUsers(context.Context, int, string) (admin.UserPage, error)
-	ListUsersForActor(context.Context, string, int, string) (admin.UserPage, error)
+	ListUsersForActor(context.Context, string, string, int, string) (admin.UserPage, error)
 	ListTasks(context.Context, int, string, string, string) (admin.TaskPage, error)
 	ChangeUserRole(context.Context, string, string, string) (admin.MutationResult, error)
 	ChangeUserStatus(context.Context, string, string, string) (admin.MutationResult, error)
@@ -83,7 +83,7 @@ type adminTaskPageResponse struct {
 
 func (h *AdminHandlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	if !onlyQueryKeys(query, "limit", "cursor") || len(query["limit"]) > 1 || len(query["cursor"]) > 1 {
+	if !onlyQueryKeys(query, "limit", "cursor", "q") || len(query["limit"]) > 1 || len(query["cursor"]) > 1 || len(query["q"]) > 1 {
 		writeTaskQueryError(w)
 		return
 	}
@@ -97,7 +97,7 @@ func (h *AdminHandlers) listUsers(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, auth.ErrUnauthenticated)
 		return
 	}
-	page, err := h.service.ListUsersForActor(r.Context(), actor.ID, limit, query.Get("cursor"))
+	page, err := h.service.ListUsersForActor(r.Context(), actor.ID, query.Get("q"), limit, query.Get("cursor"))
 	if err != nil {
 		writeAdminError(w, err)
 		return

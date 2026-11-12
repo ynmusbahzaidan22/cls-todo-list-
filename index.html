@@ -59,7 +59,10 @@
           </div>
           <div class="field-group">
             <label class="field-label" for="login-password">Password</label>
-            <input class="auth-input" id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required aria-describedby="login-password-error">
+            <div class="password-input-wrap">
+              <input class="auth-input" id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required aria-describedby="login-password-error">
+              <button class="password-visibility-toggle" type="button" aria-label="Show password" aria-controls="login-password" aria-pressed="false" data-password-visibility-toggle><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle><path class="password-toggle-slash" d="M4 20 20 4"></path></svg></button>
+            </div>
             <p class="field-error" id="login-password-error"></p>
           </div>
           <button class="auth-submit" id="login-submit" type="submit"><span id="login-submit-label">Sign in</span><span aria-hidden="true">→</span></button>
@@ -79,13 +82,19 @@
           </div>
           <div class="field-group">
             <label class="field-label" for="register-password">Password</label>
-            <input class="auth-input" id="register-password" name="password" type="password" autocomplete="new-password" placeholder="Create a password" required aria-describedby="register-password-hint register-password-error">
+            <div class="password-input-wrap">
+              <input class="auth-input" id="register-password" name="password" type="password" autocomplete="new-password" placeholder="Create a password" required aria-describedby="register-password-hint register-password-error">
+              <button class="password-visibility-toggle" type="button" aria-label="Show password" aria-controls="register-password" aria-pressed="false" data-password-visibility-toggle><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle><path class="password-toggle-slash" d="M4 20 20 4"></path></svg></button>
+            </div>
             <p class="field-hint" id="register-password-hint">Use 12–128 characters.</p>
             <p class="field-error" id="register-password-error"></p>
           </div>
           <div class="field-group">
             <label class="field-label" for="register-confirm-password">Confirm password</label>
-            <input class="auth-input" id="register-confirm-password" name="confirm-password" type="password" autocomplete="new-password" placeholder="Enter your password again" required aria-describedby="register-confirm-password-error">
+            <div class="password-input-wrap">
+              <input class="auth-input" id="register-confirm-password" name="confirm-password" type="password" autocomplete="new-password" placeholder="Enter your password again" required aria-describedby="register-confirm-password-error">
+              <button class="password-visibility-toggle" type="button" aria-label="Show password" aria-controls="register-confirm-password" aria-pressed="false" data-password-visibility-toggle><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle><path class="password-toggle-slash" d="M4 20 20 4"></path></svg></button>
+            </div>
             <p class="field-error" id="register-confirm-password-error"></p>
           </div>
           <button class="auth-submit" id="register-submit" type="submit"><span id="register-submit-label">Create account</span><span aria-hidden="true">→</span></button>
@@ -112,13 +121,52 @@
       </section>
 
       <section class="todo-card" id="todo-view" aria-labelledby="page-title" hidden>
-        <section class="admin-account-panel" id="admin-account-panel" aria-labelledby="admin-account-title" hidden>
-          <h2 id="admin-account-title">Account administration</h2>
-          <p>Manage account roles and access. Changes revoke the affected account's existing sessions.</p>
-          <p id="admin-account-feedback" role="status" aria-live="polite"></p>
-          <div id="admin-account-loading" role="status" hidden>Loading accounts…</div>
-          <div id="admin-account-error" role="alert" hidden></div>
-          <div id="admin-account-list" class="admin-account-list" aria-busy="false"></div>
+        <section class="admin-account-panel admin-dashboard" id="admin-account-panel" aria-labelledby="admin-account-title" hidden>
+          <div id="admin-dashboard-view" class="admin-dashboard-view">
+            <header class="admin-dashboard-heading">
+              <div><p class="eyebrow">ADMINISTRATION</p><h2 id="admin-account-title" tabindex="-1">Admin dashboard</h2><p>Manage account access and review tasks across the workspace.</p></div>
+            </header>
+            <div class="admin-dashboard-grid">
+              <section class="admin-section" id="admin-users-section" aria-label="Admin dashboard user preview">
+                <div class="admin-section-heading"><div><p class="eyebrow">PEOPLE</p><h3 id="admin-users-title">Users</h3><p>Recent users. Open the full view to search or manage accounts.</p></div></div>
+                <p id="admin-user-preview-count" class="admin-count" role="status" aria-live="polite"></p>
+                <div id="admin-user-preview-loading" class="admin-state" role="status" hidden>Loading users…</div>
+                <div id="admin-user-preview-error" class="admin-state admin-state-error" role="alert" hidden>Users are unavailable. Refresh and try again.</div>
+                <div id="admin-user-preview-empty" class="admin-state" role="status" hidden>No users to show yet.</div>
+                <div id="admin-user-preview-list" class="admin-preview-list" aria-busy="false"></div>
+                <button id="admin-view-all-users" class="secondary-button admin-view-all" type="button">View all users</button>
+              </section>
+              <section class="admin-section" id="admin-tasks-section" aria-label="Admin dashboard task preview">
+                <div class="admin-section-heading"><div><p class="eyebrow">WORKSPACE OVERVIEW</p><h3 id="admin-tasks-title">All users’ tasks</h3><p>Latest tasks across accounts. This view is read-only.</p></div><span class="admin-read-only-badge">Read only</span></div>
+                <p id="admin-task-preview-count" class="admin-count" role="status" aria-live="polite"></p>
+                <div id="admin-task-preview-loading" class="admin-state" role="status" hidden>Loading tasks…</div>
+                <div id="admin-task-preview-error" class="admin-state admin-state-error" role="alert" hidden>Tasks are unavailable. Refresh and try again.</div>
+                <div id="admin-task-preview-empty" class="admin-state" role="status" hidden>No tasks to show yet.</div>
+                <div id="admin-task-preview-list" class="admin-task-list" aria-busy="false"></div>
+                <button id="admin-view-all-tasks" class="secondary-button admin-view-all" type="button">View all tasks</button>
+              </section>
+            </div>
+          </div>
+          <section id="admin-users-view" class="admin-standalone-view" aria-label="All users management" hidden>
+            <button class="secondary-button admin-back-button" id="admin-users-back" type="button">← Back to admin dashboard</button>
+            <header class="admin-view-heading"><div><p class="eyebrow">ADMINISTRATION</p><h2 id="admin-users-view-title" tabindex="-1">Users</h2><p>Search by name and manage roles, status, and sessions.</p></div></header>
+            <div class="admin-user-search"><label for="admin-user-search-input">Search users by name</label><input id="admin-user-search-input" type="search" maxlength="100" autocomplete="off" placeholder="Enter a name"></div>
+            <p id="admin-account-count" class="admin-count" role="status" aria-live="polite"></p>
+            <p id="admin-account-feedback" class="admin-feedback" role="status" aria-live="polite"></p>
+            <div id="admin-account-loading" class="admin-state" role="status" hidden>Loading users…</div>
+            <div id="admin-account-error" class="admin-state admin-state-error" role="alert" hidden>Account administration is unavailable. Refresh and try again.</div>
+            <div id="admin-account-empty" class="admin-state" role="status" hidden>No users match that name.</div>
+            <div id="admin-account-list" class="admin-account-list" aria-busy="false"></div>
+          </section>
+          <section id="admin-tasks-view" class="admin-standalone-view" aria-label="All users tasks read-only view" hidden>
+            <button class="secondary-button admin-back-button" id="admin-tasks-back" type="button">← Back to admin dashboard</button>
+            <header class="admin-view-heading"><div><p class="eyebrow">READ-ONLY WORKSPACE OVERVIEW</p><h2 id="admin-tasks-view-title" tabindex="-1">All users’ tasks</h2><p>Tasks from all accounts. No task changes are available in this view.</p></div></header>
+            <p id="admin-task-count" class="admin-count" role="status" aria-live="polite"></p>
+            <div id="admin-task-loading" class="admin-state" role="status" hidden>Loading tasks…</div>
+            <div id="admin-task-error" class="admin-state admin-state-error" role="alert" hidden>Tasks are unavailable. Refresh and try again.</div>
+            <div id="admin-task-empty" class="admin-state" role="status" hidden>No tasks to show yet.</div>
+            <div id="admin-task-list" class="admin-task-list" aria-busy="false"></div>
+          </section>
         </section>
         <details class="task-options timezone-preference" id="timezone-preference">
           <summary class="task-options-summary">

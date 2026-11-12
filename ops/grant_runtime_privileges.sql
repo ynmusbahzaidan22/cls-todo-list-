@@ -1,16 +1,40 @@
 \set ON_ERROR_STOP on
+BEGIN;
 
 \if :{?runtime_role}
 \else
 \set runtime_role todo_runtime
 \endif
 
-SELECT format('REVOKE %I FROM %I CASCADE', parent.rolname, :'runtime_role')
-FROM pg_auth_members m
-JOIN pg_roles parent ON parent.oid=m.roleid
-JOIN pg_roles member ON member.oid=m.member
-WHERE member.rolname=:'runtime_role'
-\gexec
+SELECT :'runtime_role' = 'todo_runtime' AS runtime_role_name_ok \gset
+\if :runtime_role_name_ok
+\else
+\echo Refusing to grant privileges to a role other than todo_runtime.
+\quit 3
+\endif
+
+SELECT (
+  NOT EXISTS (
+    SELECT 1 FROM pg_roles
+    WHERE rolname = :'runtime_role'
+      AND rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolinherit
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  )
+  OR EXISTS (
+    SELECT 1 FROM pg_auth_members m
+    JOIN pg_roles member ON member.oid = m.member
+    WHERE member.rolname = :'runtime_role'
+  )
+) AS runtime_role_invalid \gset
+\if :runtime_role_invalid
+\echo todo_runtime is missing, has unsafe attributes, or has role memberships; refusing to grant privileges.
+\quit 3
+\endif
 SELECT format('REVOKE CREATE, TEMPORARY ON DATABASE %I FROM PUBLIC CASCADE', current_database())
 \gexec
 SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I CASCADE', current_database(), :'runtime_role')
@@ -80,3 +104,5 @@ SELECT format('GRANT INSERT ON app.admin_audit_events TO %I', :'runtime_role')
 \gexec
 SELECT format('REVOKE ALL PRIVILEGES ON app.active_admin_guard FROM %I CASCADE', :'runtime_role')
 \gexec
+
+COMMIT;

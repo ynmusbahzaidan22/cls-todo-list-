@@ -108,6 +108,85 @@ func TestLoadValidProductionConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadValidRenderProductionConfiguration(t *testing.T) {
+	values := renderProductionValues()
+	cfg, err := load(mapLookup(values))
+	if err != nil {
+		t.Fatalf("valid Render configuration was rejected: %v", err)
+	}
+	if cfg.TrustedProxyProvider != "render" || len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("Render proxy mode was not selected exclusively: provider=%q CIDRs=%v", cfg.TrustedProxyProvider, cfg.TrustedProxyCIDRs)
+	}
+}
+
+func TestLoadRenderProxyModeFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(map[string]string)
+	}{
+		{name: "missing Render marker", change: func(v map[string]string) { delete(v, "RENDER") }},
+		{name: "forged false Render marker", change: func(v map[string]string) { v["RENDER"] = "false" }},
+		{name: "wrong service type", change: func(v map[string]string) { v["RENDER_SERVICE_TYPE"] = "private" }},
+		{name: "missing service ID", change: func(v map[string]string) { delete(v, "RENDER_SERVICE_ID") }},
+		{name: "blank service ID", change: func(v map[string]string) { v["RENDER_SERVICE_ID"] = "  " }},
+		{name: "missing external URL", change: func(v map[string]string) { delete(v, "RENDER_EXTERNAL_URL") }},
+		{name: "external URL mismatch", change: func(v map[string]string) { v["RENDER_EXTERNAL_URL"] = "https://attacker.onrender.com" }},
+		{name: "missing external hostname", change: func(v map[string]string) { delete(v, "RENDER_EXTERNAL_HOSTNAME") }},
+		{name: "external hostname mismatch", change: func(v map[string]string) { v["RENDER_EXTERNAL_HOSTNAME"] = "attacker.onrender.com" }},
+		{name: "conflicting CIDR mode", change: func(v map[string]string) { v["TRUSTED_PROXY_CIDRS"] = "127.0.0.1/32" }},
+		{name: "Render mode outside production", change: func(v map[string]string) { v["APP_ENV"] = "development" }},
+		{name: "unknown provider", change: func(v map[string]string) { v["TRUSTED_PROXY_PROVIDER"] = "other" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values := renderProductionValues()
+			tt.change(values)
+			if _, err := load(mapLookup(values)); err == nil {
+				t.Fatal("unsafe Render proxy configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestProductionCIDRModeStillRequiresExplicitPeers(t *testing.T) {
+	values := renderProductionValues()
+	delete(values, "TRUSTED_PROXY_PROVIDER")
+	delete(values, "RENDER")
+	delete(values, "RENDER_SERVICE_TYPE")
+	delete(values, "RENDER_SERVICE_ID")
+	delete(values, "RENDER_EXTERNAL_URL")
+	delete(values, "RENDER_EXTERNAL_HOSTNAME")
+	if _, err := load(mapLookup(values)); err == nil {
+		t.Fatal("production CIDR mode accepted an empty trusted proxy list")
+	}
+	values["TRUSTED_PROXY_CIDRS"] = "192.0.2.4/32"
+	cfg, err := load(mapLookup(values))
+	if err != nil {
+		t.Fatalf("production CIDR mode rejected an explicit peer: %v", err)
+	}
+	if cfg.TrustedProxyProvider != "" || len(cfg.TrustedProxyCIDRs) != 1 {
+		t.Fatalf("unexpected CIDR mode selection: provider=%q CIDRs=%v", cfg.TrustedProxyProvider, cfg.TrustedProxyCIDRs)
+	}
+}
+
+func renderProductionValues() map[string]string {
+	return map[string]string{
+		"APP_ENV":                  "production",
+		"HTTP_ADDR":                "0.0.0.0:10000",
+		"DATABASE_URL":             "postgres://todo_runtime:secret@db.example.test:5432/todo?sslmode=verify-full",
+		"DATABASE_RUNTIME_ROLE":    "todo_runtime",
+		"TRUSTED_ORIGIN":           "https://cls-todo-list.onrender.com",
+		"SESSION_COOKIE_SECURE":    "true",
+		"TRUSTED_PROXY_PROVIDER":   "render",
+		"TASK_CURSOR_SIGNING_KEY":  strings.Repeat("ab", 32),
+		"RENDER":                   "true",
+		"RENDER_SERVICE_TYPE":      "web",
+		"RENDER_SERVICE_ID":        "srv-test",
+		"RENDER_EXTERNAL_URL":      "https://cls-todo-list.onrender.com",
+		"RENDER_EXTERNAL_HOSTNAME": "cls-todo-list.onrender.com",
+	}
+}
+
 func TestProductionDatabaseURLRejectsAmbiguousOrOverriddenSettings(t *testing.T) {
 	t.Setenv("PGSERVICE", "")
 	t.Setenv("PGSERVICEFILE", "")

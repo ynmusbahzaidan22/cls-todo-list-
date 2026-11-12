@@ -2,6 +2,12 @@
 
 This repository contains an HTML, CSS, and Vanilla JavaScript frontend with local login and registration, plus a Go HTTP API backed by PostgreSQL. The Go server serves the allowlisted frontend files and API from one origin, without exposing other repository files. Authenticated task management is connected to the backend API, with PostgreSQL as the source of truth. See [OPERATIONS.md](OPERATIONS.md) for database roles, production configuration, reverse proxy assumptions, backups, and recovery.
 
+## Production
+
+The live application is available at [https://cls-todo-list.onrender.com](https://cls-todo-list.onrender.com). It runs as a Docker web service on Render and uses Neon PostgreSQL. Production authentication uses same-origin, `HttpOnly`, `Secure`, `__Host-` cookies backed by server-side sessions; only session-token hashes are stored, with idle and absolute expiry. See [OPERATIONS.md](OPERATIONS.md) for the Render proxy assumptions and production configuration.
+
+Production smoke evidence (2026-11-12): a read-only HTTPS request to `/health/ready` returned HTTP 200 with certificate verification successful. The owner reported a successful manual browser check covering registration, login and logout, task persistence, user isolation, individual and template-based task creation, USER access to Admin returning 403, and the Admin dashboard. The manual browser results are owner-reported, not an automated test result. The readiness response does not identify the deployed source commit.
+
 ## Requirements
 
 - Go 1.26 or newer.
@@ -84,7 +90,8 @@ Down sections are migration-specific, not a general data reset. Migrations 002, 
 | `TASK_CURSOR_SIGNING_KEY` | Production | 64 hexadecimal characters | Stable 32-byte HMAC key used to sign active-task pagination cursors. |
 | `TRUSTED_ORIGIN` | No | `http://127.0.0.1:8080` | Exact browser origin permitted for state-changing requests. |
 | `SESSION_COOKIE_SECURE` | No locally; required for production | `false` locally, `true` in production | Production always requires Secure cookies and an HTTPS origin. |
-| `TRUSTED_PROXY_CIDRS` | Production | Empty locally | Exact reverse-proxy peer networks allowed to provide client IP forwarding headers. |
+| `TRUSTED_PROXY_CIDRS` | Production CIDR mode | Empty locally | Explicit reverse-proxy peer networks. Required in production unless verified Render mode is selected. |
+| `TRUSTED_PROXY_PROVIDER` | Production | Empty | Optional explicit provider mode. `render` is accepted only with verified Render web-service runtime metadata and cannot be combined with `TRUSTED_PROXY_CIDRS`. |
 | `POSTGRES_DB` | Compose/migrations | `todo_dev` | Local database name. |
 | `POSTGRES_USER` | Compose/migrations | `todo_dev` | Local database user. |
 | `POSTGRES_PASSWORD` | Compose/migrations | Set a local-only value | Local database password. |
@@ -120,7 +127,7 @@ Migration `014_admin_account_audit.sql` creates the audit and final-Admin guard 
 
 ### One-time initial Admin bootstrap
 
-`cmd/adminctl` is an operational CLI, not an HTTP endpoint. It can only target the fixed local development endpoint `127.0.0.1:15432/todo_dev` during normal operation. The isolated `todo_test` endpoint is accepted only when both `ADMINCTL_AUTOMATED_TEST=1` and `REQUIRE_POSTGRES_INTEGRATION=1` are set and both test URLs validate to that exact endpoint. The CLI requires the explicit database name, checks the connected database and database user, rejects PostgreSQL environment overrides, and never prints connection settings.
+`cmd/adminctl` is an operational CLI, not an HTTP endpoint. Its normal mode targets only the fixed local development endpoint `127.0.0.1:15432/todo_dev`; the isolated `todo_test` endpoint is accepted only in dedicated automated-test mode. A separate `--production` mode is pinned to the direct Frankfurt Neon `neondb` owner endpoint and requires verified TLS, PostgreSQL 18.6, Tern 15, an explicit database name, and an additional production-bootstrap authorization flag for writes. Production mode rejects inherited development/test URLs and PostgreSQL overrides, verifies the connected database owner, and never prints connection settings. See the production procedure in [OPERATIONS.md](OPERATIONS.md).
 
 After the actual owner account has been registered normally and is active, first verify through the guarded development migration status that `todo_dev` is at 15/15; migration 015 is currently pending there and must be applied only through the separately authorized guarded development migration procedure after its backup preconditions. Then load the development administrator settings into the process using the strict environment reader. Enter the exact normalized owner email and run the read-only status command. Proceed only if it reports zero active Admins, a zero guard count, and an eligible target. Bootstrap requires the matching `--confirm-database todo_dev` flag:
 
@@ -140,7 +147,7 @@ go run ./cmd/adminctl bootstrap --database todo_dev --email $ownerEmail --confir
 if ($LASTEXITCODE -ne 0) { throw 'Bootstrap failed; inspect the safe CLI error and stop.' }
 ```
 
-The CLI locks account changes and the active-Admin guard in one transaction, promotes only the selected active USER account, revokes its sessions, writes a system-attributed audit event, and commits atomically. The owner must log in again after session revocation. Subsequent Admins are managed through the authenticated Admin interface. Current implementation has no email-verification state; any company-required activation step must be completed before the account is eligible. Actual first-Admin provisioning remains pending until the real owner account exists and is approved. Do not promote a placeholder or an existing development account.
+The development bootstrap locks account changes and the active-Admin guard in one transaction, promotes only the selected active USER account, revokes its sessions, writes a system-attributed audit event, and commits atomically. The production bootstrap uses the same transaction and guard but preserves existing sessions for the production owner flow. Subsequent Admins are managed through the authenticated Admin interface. Current implementation has no email-verification state; any company-required activation step must be completed before the account is eligible. The approved first Admin was bootstrapped on production on 2026-11-12; no personal account identifier is recorded here. Do not promote a placeholder or an existing development account.
 
 ## Task API
 

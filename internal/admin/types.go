@@ -72,7 +72,7 @@ type MutationResult struct {
 }
 
 type Repository interface {
-	ListAdminUsers(context.Context, string, *Cursor, int) ([]User, error)
+	ListAdminUsers(context.Context, string, string, *Cursor, int) ([]User, error)
 	ListAdminTasks(context.Context, string, string, *Cursor, int) ([]Task, error)
 	ChangeUserRole(context.Context, string, string, string) (MutationResult, error)
 	ChangeUserStatus(context.Context, string, string, string) (MutationResult, error)

@@ -22,6 +22,7 @@ type fakeAdminService struct {
 	taskCalls      int
 	gotLimit       int
 	gotCursor      string
+	gotUserSearch  string
 	gotStatus      string
 	gotState       string
 	userErr        error
@@ -38,8 +39,10 @@ func (s *fakeAdminService) ListUsers(_ context.Context, limit int, cursor string
 	return s.users, s.userErr
 }
 
-func (s *fakeAdminService) ListUsersForActor(ctx context.Context, _ string, limit int, cursor string) (admin.UserPage, error) {
-	return s.ListUsers(ctx, limit, cursor)
+func (s *fakeAdminService) ListUsersForActor(_ context.Context, _ string, search string, limit int, cursor string) (admin.UserPage, error) {
+	s.userCalls++
+	s.gotLimit, s.gotCursor, s.gotUserSearch = limit, cursor, search
+	return s.users, s.userErr
 }
 
 func (s *fakeAdminService) ListTasks(_ context.Context, limit int, cursor, status, state string) (admin.TaskPage, error) {
@@ -78,7 +81,7 @@ func (r *countingAdminRepository) RevokeUserSessions(context.Context, string, st
 	return admin.MutationResult{}, nil
 }
 
-func (r *countingAdminRepository) ListAdminUsers(context.Context, string, *admin.Cursor, int) ([]admin.User, error) {
+func (r *countingAdminRepository) ListAdminUsers(context.Context, string, string, *admin.Cursor, int) ([]admin.User, error) {
 	r.userCalls++
 	return nil, nil
 }
@@ -255,7 +258,7 @@ func TestAdminListQueryValidation(t *testing.T) {
 		Admin: NewAdminHandlers(service),
 	})
 	for _, path := range []string{
-		"/api/admin/users?limit=0", "/api/admin/users?limit=-1", "/api/admin/users?limit=101", "/api/admin/users?limit=1&limit=2", "/api/admin/users?unexpected=x",
+		"/api/admin/users?limit=0", "/api/admin/users?limit=-1", "/api/admin/users?limit=101", "/api/admin/users?limit=1&limit=2", "/api/admin/users?unexpected=x", "/api/admin/users?q=a&q=b",
 		"/api/admin/tasks?status=INVALID", "/api/admin/tasks?state=hidden", "/api/admin/tasks?cursor=x&cursor=y",
 		"/api/admin/tasks?limit=0", "/api/admin/tasks?limit=-1", "/api/admin/tasks?limit=101",
 	} {
@@ -289,6 +292,21 @@ func TestAdminListQueryValidation(t *testing.T) {
 		if !strings.Contains(result.Body.String(), `"items":[]`) {
 			t.Errorf("path %s empty results were not encoded as an empty array: %s", test.path, result.Body.String())
 		}
+	}
+}
+
+func TestAdminUserSearchQueryReachesService(t *testing.T) {
+	service := &fakeAdminService{}
+	handler := NewRouter(nil, testLogger(), t.TempDir(), RouterOptions{
+		Auth:  NewAuthHandlers(&fakeAuthService{user: auth.User{ID: "admin-1", Role: "ADMIN"}}, "todo_session", false),
+		Admin: NewAdminHandlers(service),
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/users?limit=20&q=Alice", nil)
+	request.AddCookie(&http.Cookie{Name: "todo_session", Value: "opaque-session-token"})
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || service.gotUserSearch != "Alice" || service.gotLimit != 20 {
+		t.Fatalf("search request status=%d search=%q limit=%d", result.Code, service.gotUserSearch, service.gotLimit)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ynmusbahzaidan22/cls-todo-list-/internal/task"
 )
@@ -82,25 +83,37 @@ func mapMutationError(operation string, err error) error {
 }
 
 func (s *Service) ListUsers(ctx context.Context, limit int, rawCursor string) (UserPage, error) {
-	return s.listUsers(ctx, "00000000-0000-0000-0000-000000000000", limit, rawCursor)
+	return s.listUsers(ctx, "00000000-0000-0000-0000-000000000000", "", limit, rawCursor)
 }
 
-func (s *Service) ListUsersForActor(ctx context.Context, actorID string, limit int, rawCursor string) (UserPage, error) {
-	return s.listUsers(ctx, actorID, limit, rawCursor)
+func (s *Service) ListUsersForActor(ctx context.Context, actorID, search string, limit int, rawCursor string) (UserPage, error) {
+	return s.listUsers(ctx, actorID, search, limit, rawCursor)
 }
 
-func (s *Service) listUsers(ctx context.Context, actorID string, limit int, rawCursor string) (UserPage, error) {
+func normalizeUserSearch(search string) (string, error) {
+	search = strings.TrimSpace(search)
+	if len([]rune(search)) > 100 || strings.IndexFunc(search, unicode.IsControl) >= 0 {
+		return "", ErrInvalidInput
+	}
+	return strings.ToLower(search), nil
+}
+
+func (s *Service) listUsers(ctx context.Context, actorID, rawSearch string, limit int, rawCursor string) (UserPage, error) {
 	if limit == 0 {
 		limit = DefaultPageSize
 	}
 	if limit < 1 || limit > MaxPageSize {
 		return UserPage{}, ErrInvalidInput
 	}
-	cursor, err := s.decodeCursor(rawCursor, "users", "")
+	search, err := normalizeUserSearch(rawSearch)
+	if err != nil {
+		return UserPage{}, err
+	}
+	cursor, err := s.decodeCursor(rawCursor, "users", search)
 	if err != nil {
 		return UserPage{}, ErrInvalidInput
 	}
-	items, err := s.repository.ListAdminUsers(ctx, actorID, cursor, limit+1)
+	items, err := s.repository.ListAdminUsers(ctx, actorID, search, cursor, limit+1)
 	if err != nil {
 		return UserPage{}, fmt.Errorf("list admin users: %w: %w", ErrStorage, err)
 	}
@@ -108,7 +121,7 @@ func (s *Service) listUsers(ctx context.Context, actorID string, limit int, rawC
 	if len(items) > limit {
 		page.Items = items[:limit]
 		last := page.Items[len(page.Items)-1]
-		next, err := s.encodeCursor("users", "", last.CreatedAt, last.ID, last.SnapshotAt)
+		next, err := s.encodeCursor("users", search, last.CreatedAt, last.ID, last.SnapshotAt)
 		if err != nil {
 			return UserPage{}, fmt.Errorf("encode admin user cursor: %w", ErrStorage)
 		}
