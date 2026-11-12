@@ -9,8 +9,8 @@ const start = source.indexOf("function maskHeaderEmail(value) {");
 const end = source.indexOf("\nlet currentUser = null;", start);
 assert.ok(start >= 0 && end > start, "presentation helpers must remain at the top of script.js");
 const sandbox = {};
-vm.runInNewContext(`${source.slice(start, end)}\nglobalThis.helpers = { maskHeaderEmail, togglePasswordVisibility, adminTaskViewModel };`, sandbox);
-const { adminTaskViewModel, maskHeaderEmail, togglePasswordVisibility } = sandbox.helpers;
+vm.runInNewContext(`${source.slice(start, end)}\nglobalThis.helpers = { maskHeaderEmail, togglePasswordVisibility, adminTaskViewModel, workspaceShowsTimeZone };`, sandbox);
+const { adminTaskViewModel, maskHeaderEmail, togglePasswordVisibility, workspaceShowsTimeZone } = sandbox.helpers;
 
 test("header email mask reveals only one local character and the final extension", () => {
   assert.equal(maskHeaderEmail("yosef.zidan@example.com"), "y•••@•••.com");
@@ -67,6 +67,15 @@ test("admin task display model is read-only and excludes internal IDs", () => {
   assert.equal(model.deleted, false);
   assert.equal("id" in model, false);
   assert.equal(adminTaskViewModel({}).dueDate, null);
+});
+
+test("time-zone preference is shown only on the main Tasks screen", () => {
+  assert.ok(markup.includes('id="timezone-preference"'));
+  assert.match(source, /timeZonePreference\.hidden = !workspaceVisible \|\| !workspaceShowsTimeZone\(workspaceScreen\)/);
+  assert.equal(workspaceShowsTimeZone("tasks"), true);
+  for (const screen of ["deleted", "completed", "admin-users", "admin-tasks"]) {
+    assert.equal(workspaceShowsTimeZone(screen), false, `${screen} must not show the account time-zone control`);
+  }
 });
 
 test("admin dashboard previews five users and tasks, with separate paginated views", () => {

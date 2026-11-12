@@ -40,6 +40,10 @@ function adminTaskViewModel(task) {
   };
 }
 
+function workspaceShowsTimeZone(screen) {
+  return screen === "tasks";
+}
+
 let currentUser = null;
 function workspaceScreenFromHash(hash) {
   if (hash === "#recently-deleted") return "deleted";
@@ -108,6 +112,7 @@ const adminTaskPreviewEmpty = document.querySelector("#admin-task-preview-empty"
 const adminTaskPreviewCount = document.querySelector("#admin-task-preview-count");
 const adminAccountCount = document.querySelector("#admin-account-count");
 const adminTaskCount = document.querySelector("#admin-task-count");
+const timeZonePreference = document.querySelector("#timezone-preference");
 const authTitle = document.querySelector("#auth-title");
 const authIntro = document.querySelector("#auth-intro");
 const authFeedback = document.querySelector("#auth-feedback");
@@ -188,6 +193,7 @@ function renderAuthState() {
   adminDashboardView.hidden = workspaceScreen !== "tasks";
   adminUsersView.hidden = workspaceScreen !== "admin-users";
   adminTasksView.hidden = workspaceScreen !== "admin-tasks";
+  timeZonePreference.hidden = !workspaceVisible || !workspaceShowsTimeZone(workspaceScreen);
   todoView.hidden = !workspaceVisible;
   tasksScreen.hidden = !workspaceVisible || workspaceScreen !== "tasks";
   recentlyDeletedScreen.hidden = !workspaceVisible || workspaceScreen !== "deleted";
