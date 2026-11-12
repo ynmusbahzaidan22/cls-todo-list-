@@ -21,6 +21,7 @@ type fakeRepository struct {
 	userLimit  int
 	taskLimit  int
 	userCursor *Cursor
+	userSearch string
 	taskCursor *Cursor
 	status     string
 	state      string
@@ -30,13 +31,22 @@ type fakeRepository struct {
 	taskErr    error
 }
 
-func (r *fakeRepository) ListAdminUsers(_ context.Context, _ string, cursor *Cursor, limit int) ([]User, error) {
+func (r *fakeRepository) ListAdminUsers(_ context.Context, _ string, search string, cursor *Cursor, limit int) ([]User, error) {
 	r.userCalls++
-	r.userCursor, r.userLimit = cursor, limit
+	r.userCursor, r.userLimit, r.userSearch = cursor, limit, search
 	if r.userErr != nil {
 		return nil, r.userErr
 	}
 	items := append([]User(nil), r.users...)
+	if search != "" {
+		filtered := items[:0]
+		for _, item := range items {
+			if strings.Contains(strings.ToLower(item.Name), search) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
 	snapshotAt := time.Now().UTC().Add(time.Hour)
 	if cursor != nil {
 		snapshotAt = cursor.SnapshotAt
@@ -53,6 +63,35 @@ func (r *fakeRepository) ListAdminUsers(_ context.Context, _ string, cursor *Cur
 		return items[i].CreatedAt.After(items[j].CreatedAt)
 	})
 	return pageUsers(items, cursor, limit), nil
+}
+
+func TestListUsersSearchIsCaseInsensitiveAndCursorBound(t *testing.T) {
+	created := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	repo := &fakeRepository{users: []User{
+		{ID: "00000000-0000-4000-8000-000000000003", Name: "Alice Example", CreatedAt: created},
+		{ID: "00000000-0000-4000-8000-000000000002", Name: "ALICE North", CreatedAt: created.Add(-time.Minute)},
+		{ID: "00000000-0000-4000-8000-000000000001", Name: "Bob Example", CreatedAt: created.Add(-2 * time.Minute)},
+	}}
+	service := NewService(repo, make([]byte, 32))
+	first, err := service.ListUsersForActor(context.Background(), "00000000-0000-4000-8000-000000000099", "  ALIce ", 1, "")
+	if err != nil || len(first.Items) != 1 || first.Items[0].Name != "Alice Example" || first.NextCursor == nil {
+		t.Fatalf("first matching page=%+v err=%v", first, err)
+	}
+	if repo.userSearch != "alice" {
+		t.Fatalf("repository search=%q, want normalized case-insensitive value", repo.userSearch)
+	}
+	second, err := service.ListUsersForActor(context.Background(), "00000000-0000-4000-8000-000000000099", "ALICE", 1, *first.NextCursor)
+	if err != nil || len(second.Items) != 1 || second.Items[0].Name != "ALICE North" {
+		t.Fatalf("second matching page=%+v err=%v", second, err)
+	}
+	if _, err := service.ListUsersForActor(context.Background(), "00000000-0000-4000-8000-000000000099", "bob", 1, *first.NextCursor); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("cursor reused with another search error=%v, want ErrInvalidInput", err)
+	}
+	for _, invalid := range []string{strings.Repeat("x", 101), "bad\nsearch"} {
+		if _, err := service.ListUsersForActor(context.Background(), "00000000-0000-4000-8000-000000000099", invalid, 1, ""); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("invalid search %q error=%v, want ErrInvalidInput", invalid, err)
+		}
+	}
 }
 
 func (r *fakeRepository) ListAdminTasks(_ context.Context, status, state string, cursor *Cursor, limit int) ([]Task, error) {

@@ -50,7 +50,7 @@ func TestAdminUsersRepositoryListsAndPaginatesAsRuntimePostgreSQL(t *testing.T) 
 		if pageCount > 1000 {
 			t.Fatal("admin user pagination did not reach both fixtures")
 		}
-		items, err := repo.ListAdminUsers(ctx, ids[0], cursor, 1)
+		items, err := repo.ListAdminUsers(ctx, ids[0], "", cursor, 1)
 		if err != nil {
 			t.Fatalf("list admin users through runtime role: %v", err)
 		}
@@ -80,12 +80,20 @@ func TestAdminUsersRepositoryListsAndPaginatesAsRuntimePostgreSQL(t *testing.T) 
 	if len(pageIDs) != len(users) {
 		t.Fatalf("admin user pagination returned %d of %d fixtures", len(pageIDs), len(users))
 	}
+	searchItems, err := repo.ListAdminUsers(ctx, ids[0], "alpha", nil, 10)
+	if err != nil || len(searchItems) != 1 || searchItems[0].ID != users[0].ID {
+		t.Fatalf("case-insensitive name search returned %+v err=%v; want only Alpha fixture", searchItems, err)
+	}
+	literalItems, err := repo.ListAdminUsers(ctx, ids[0], "%_", nil, 10)
+	if err != nil || len(literalItems) != 0 {
+		t.Fatalf("search wildcard characters were not treated literally: items=%+v err=%v", literalItems, err)
+	}
 	orderedExpected := []string{users[0].ID, users[1].ID}
 	sort.Sort(sort.Reverse(sort.StringSlice(orderedExpected)))
 	if fmt.Sprint(pageIDs) != fmt.Sprint(orderedExpected) {
 		t.Fatalf("equal-created_at users were not ordered by descending ID: got=%v want=%v", pageIDs, orderedExpected)
 	}
-	empty, err := repo.ListAdminUsers(ctx, ids[0], &admin.Cursor{CreatedAt: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), ID: "00000000-0000-0000-0000-000000000000", SnapshotAt: time.Now().UTC().Add(time.Minute)}, 2)
+	empty, err := repo.ListAdminUsers(ctx, ids[0], "", &admin.Cursor{CreatedAt: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), ID: "00000000-0000-0000-0000-000000000000", SnapshotAt: time.Now().UTC().Add(time.Minute)}, 2)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty admin user result = %d rows, err=%v; want zero rows", len(empty), err)
 	}
@@ -110,7 +118,7 @@ func TestAdminUserPaginationPinsCreationAndUpdateSnapshotPostgreSQL(t *testing.T
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids[:4])))
 	repo := NewAdminRepository(runtimePool)
-	first, err := repo.ListAdminUsers(ctx, ids[0], nil, 1)
+	first, err := repo.ListAdminUsers(ctx, ids[0], "", nil, 1)
 	if err != nil || len(first) != 1 || first[0].ID != ids[0] || first[0].SnapshotAt.IsZero() {
 		t.Fatalf("first snapshot page=%+v err=%v", first, err)
 	}
@@ -130,7 +138,7 @@ func TestAdminUserPaginationPinsCreationAndUpdateSnapshotPostgreSQL(t *testing.T
 	var got []string
 	cursor := &admin.Cursor{CreatedAt: first[0].CreatedAt, ID: first[0].ID, SnapshotAt: first[0].SnapshotAt}
 	for pages := 0; pages < 10; pages++ {
-		items, listErr := repo.ListAdminUsers(ctx, ids[0], cursor, 1)
+		items, listErr := repo.ListAdminUsers(ctx, ids[0], "", cursor, 1)
 		if listErr != nil {
 			t.Fatalf("continue snapshot pagination: %v", listErr)
 		}

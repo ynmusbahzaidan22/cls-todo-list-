@@ -2594,6 +2594,28 @@ body.workspace-page { overflow-x: clip; }
 .admin-task-details dt { color: #77859a; }
 .admin-task-details dd { margin: 0; color: #3e4e63; font-weight: 700; overflow-wrap: anywhere; }
 .admin-load-more, .admin-task-load-more { justify-self: start; }
+.admin-dashboard-view { min-width: 0; }
+.admin-dashboard-grid { align-items: stretch; }
+.admin-preview-list { display: grid; max-height: 22rem; min-width: 0; gap: .55rem; overflow: auto; overscroll-behavior: contain; }
+.admin-user-preview-card { display: grid; min-width: 0; gap: .2rem; padding: .7rem .8rem; border: 1px solid #e4eaf2; border-radius: .75rem; background: #fbfcfe; }
+.admin-user-preview-card strong { color: #26364b; overflow-wrap: anywhere; }
+.admin-user-preview-card span { color: #68778d; font-size: .78rem; }
+.admin-count { min-height: 1.25em; margin: 0 0 .65rem; color: #65748a; font-size: .78rem; font-weight: 650; }
+.admin-view-all { margin-top: .85rem; }
+.admin-standalone-view { min-width: 0; padding: clamp(1rem, 2vw, 1.5rem); border: 1px solid #e2e9f2; border-radius: 1.1rem; background: #f8fafd; box-shadow: 0 10px 30px rgb(30 55 90 / 5%); }
+.admin-back-button { margin-bottom: 1rem; }
+.admin-view-heading { margin-bottom: 1.25rem; }
+.admin-view-heading .eyebrow { margin: 0 0 .4rem; color: #55709a; font-size: .68rem; font-weight: 800; letter-spacing: .13em; }
+.admin-view-heading h2 { margin: 0; font-size: clamp(1.4rem, 2.4vw, 1.9rem); letter-spacing: -.03em; }
+.admin-view-heading p:last-child { margin: .4rem 0 0; color: #617087; }
+.admin-user-search { display: grid; max-width: 34rem; gap: .4rem; margin-bottom: 1rem; }
+.admin-user-search label { color: #506078; font-size: .8rem; font-weight: 700; }
+.admin-user-search input { width: 100%; min-height: 2.75rem; padding: .65rem .8rem; border: 1px solid #cfd8e5; border-radius: .7rem; background: #fff; }
+.admin-user-search input:focus-visible, .admin-back-button:focus-visible, .admin-view-all:focus-visible { outline: 3px solid rgb(57 111 207 / 28%); outline-offset: 2px; }
+.admin-standalone-view .admin-account-list, .admin-standalone-view .admin-task-list { margin-top: .5rem; }
+.admin-standalone-view .admin-task-list { max-height: none; }
+.admin-section .admin-task-list { max-height: 22rem; overflow: auto; overscroll-behavior: contain; }
+.admin-account-list > .admin-load-more, .admin-task-list > .admin-task-load-more { min-height: 2.75rem; }
 
 @media (max-width: 900px) {
   .admin-dashboard-grid { grid-template-columns: minmax(0, 1fr); }

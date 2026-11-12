@@ -22,7 +22,7 @@ func NewAdminRepository(pool *pgxpool.Pool) *AdminRepository {
 	return &AdminRepository{pool: pool}
 }
 
-func (r *AdminRepository) ListAdminUsers(ctx context.Context, actorID string, cursor *admin.Cursor, maxRows int) ([]admin.User, error) {
+func (r *AdminRepository) ListAdminUsers(ctx context.Context, actorID, search string, cursor *admin.Cursor, maxRows int) ([]admin.User, error) {
 	var cursorTime, cursorID, snapshotAt any
 	if cursor != nil {
 		cursorTime, cursorID = cursor.CreatedAt, cursor.ID
@@ -37,9 +37,10 @@ func (r *AdminRepository) ListAdminUsers(ctx context.Context, actorID string, cu
 	       CASE WHEN u.id=$5::uuid THEN 'self' WHEN u.role='ADMIN' AND u.status='ACTIVE' AND (SELECT count(*) FROM app.users WHERE role='ADMIN' AND status='ACTIVE') <= 1 THEN 'last_active_admin' ELSE '' END
 		FROM app.users AS u CROSS JOIN snapshot
 		WHERE u.created_at <= snapshot.at AND u.updated_at <= snapshot.at
+		  AND ($6 = '' OR strpos(lower(u.name), $6) > 0)
 		  AND ($2::timestamptz IS NULL OR (u.created_at, u.id) < ($2::timestamptz, $3::uuid))
 		ORDER BY u.created_at DESC, u.id DESC
-		LIMIT $4`, snapshotAt, cursorTime, cursorID, maxRows, actorID)
+		LIMIT $4`, snapshotAt, cursorTime, cursorID, maxRows, actorID, search)
 	if err != nil {
 		return nil, err
 	}

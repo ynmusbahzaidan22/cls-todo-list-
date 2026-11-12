@@ -69,22 +69,38 @@ test("admin task display model is read-only and excludes internal IDs", () => {
   assert.equal(adminTaskViewModel({}).dueDate, null);
 });
 
-test("admin dashboard separates user management from all-task read-only states", () => {
+test("admin dashboard previews five users and tasks, with separate paginated views", () => {
   const taskSectionStart = markup.indexOf('id="admin-tasks-section"');
-  const taskSectionEnd = markup.indexOf("</section>", taskSectionStart);
+  const taskSectionEnd = markup.indexOf('id="admin-users-view"', taskSectionStart);
   const taskSection = markup.slice(taskSectionStart, taskSectionEnd);
   assert.ok(markup.includes('id="admin-users-section"'));
   assert.match(taskSection, /All users’ tasks/);
   assert.match(taskSection, /Read only/);
-  assert.match(taskSection, /id="admin-task-loading"/);
-  assert.match(taskSection, /id="admin-task-empty"/);
-  assert.match(taskSection, /id="admin-task-error"/);
-  assert.match(markup, /id="admin-account-loading"/);
-  assert.match(markup, /id="admin-account-empty"/);
-  assert.match(markup, /id="admin-account-error"/);
-  assert.match(source, /\/api\/admin\/tasks\?/);
-  assert.match(source, /state: "all"/);
+  assert.match(taskSection, /id="admin-task-preview-loading"/);
+  assert.match(taskSection, /id="admin-task-preview-empty"/);
+  assert.match(taskSection, /id="admin-task-preview-error"/);
+  assert.match(markup, /id="admin-user-preview-loading"/);
+  assert.match(markup, /id="admin-user-preview-empty"/);
+  assert.match(markup, /id="admin-user-preview-error"/);
+  assert.match(markup, /id="admin-view-all-users"/);
+  assert.match(markup, /id="admin-view-all-tasks"/);
+  assert.match(markup, /id="admin-users-view"[\s\S]*id="admin-user-search-input"[\s\S]*id="admin-account-list"/);
+  assert.match(markup, /id="admin-tasks-view"[\s\S]*id="admin-task-list"/);
+  assert.match(markup, /Back to admin dashboard/);
+  assert.match(source, /\/api\/admin\/users\?limit=5/);
+  assert.match(source, /\/api\/admin\/tasks\?limit=5&state=all/);
+  assert.match(source, /new URLSearchParams\(\{ limit: "20", q: adminUserSearchInput\.value\.trim\(\) \}\)/);
+  assert.match(source, /new URLSearchParams\(\{ limit: "20", state: "all" \}\)/);
+  assert.match(source, /adminUserSearchTimer = setTimeout\(\(\) => void loadAdminAccounts\(\), 250\)/);
+  assert.match(source, /adminViewAllUsersButton\.addEventListener/);
+  assert.match(source, /adminUsersBackButton\.addEventListener/);
+  assert.match(source, /workspaceScreenFromHash/);
+  assert.match(source, /more\.addEventListener\("click", \(\) => void loadAdminAccounts\(true\)\)/);
+  assert.match(source, /more\.addEventListener\("click", \(\) => void loadAdminTasks\(true\)\)/);
   assert.doesNotMatch(source.slice(source.indexOf("function renderAdminTask"), source.indexOf("function renderAdminAccount")), /addEventListener|data-task-id/);
+  const tasksView = markup.slice(markup.indexOf('id="admin-tasks-view"'), markup.indexOf("</section>", markup.indexOf('id="admin-tasks-view"')));
+  assert.equal((tasksView.match(/<button\b/g) || []).length, 1, "the only button in the tasks view is its navigation button");
+  assert.doesNotMatch(tasksView, /data-action/);
 });
 
 test("all sign-in and registration password inputs start hidden with accessible toggles", () => {
