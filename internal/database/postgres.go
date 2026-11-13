@@ -1,3 +1,4 @@
+// Package database owns PostgreSQL pool setup and runtime-role safety verification.
 package database
 
 import (

@@ -44,6 +44,49 @@ func TestHealthEndpoints(t *testing.T) {
 	}
 }
 
+func TestFrontendFilesAreServedFromTheOrganizedAllowlist(t *testing.T) {
+	frontendDir := filepath.Join("..", "..", "frontend")
+	handler := NewRouter(checkerFunc(func(context.Context) bool { return true }), testLogger(), frontendDir)
+	for _, path := range []string{"/", "/index.html", "/styles/style.css", "/styles/foundation.css", "/scripts/auth/sessions.js", "/scripts/components/admin.js", "/scripts/tasks/workspace.js"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			result := httptest.NewRecorder()
+			handler.ServeHTTP(result, request)
+			if path == "/index.html" {
+				if result.Code != http.StatusMovedPermanently || result.Header().Get("Location") != "/" {
+					t.Fatalf("GET /index.html returned status %d with location %q, want the canonical root redirect", result.Code, result.Header().Get("Location"))
+				}
+				return
+			}
+			if result.Code != http.StatusOK || result.Body.Len() == 0 {
+				t.Fatalf("GET %s returned status %d with %d response bytes", path, result.Code, result.Body.Len())
+			}
+			if path == "/" {
+				page := result.Body.String()
+				for _, id := range []string{`id="login-form"`, `id="register-form"`, `id="admin-dashboard-view"`, `id="task-section"`, `id="activity-dialog"`} {
+					if !strings.Contains(page, id) {
+						t.Errorf("assembled page is missing %s", id)
+					}
+				}
+				if strings.Contains(page, "<!-- include:") {
+					t.Error("assembled page still contains unresolved include markers")
+				}
+			}
+		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/README.md", nil)
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+	if result.Code != http.StatusNotFound {
+		t.Fatalf("repository file path returned status %d, want 404", result.Code)
+	}
+	partial := httptest.NewRecorder()
+	handler.ServeHTTP(partial, httptest.NewRequest(http.MethodGet, "/pages/login/auth.html", nil))
+	if partial.Code != http.StatusNotFound {
+		t.Fatalf("frontend partial path returned status %d, want 404", partial.Code)
+	}
+}
+
 func TestTrustedProxyHeadersAndSecurityResponseHeaders(t *testing.T) {
 	proxyNetwork, _, _ := net.ParseCIDR("10.0.0.0/8")
 	trusted := trustedProxyContext([]string{"10.0.0.0/8"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +191,10 @@ func TestProductionRejectsUnexpectedHostAndEnablesHSTS(t *testing.T) {
 
 func TestFrontendRoutesServeOnlyAllowlistedFiles(t *testing.T) {
 	frontendDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<main>todo</main>"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(frontendDir, "pages"), 0o700); err != nil {
+		t.Fatalf("create test frontend pages: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(frontendDir, "pages", "index.html"), []byte("<main>todo</main>"), 0o600); err != nil {
 		t.Fatalf("write test frontend: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(frontendDir, ".env"), []byte("must stay private"), 0o600); err != nil {

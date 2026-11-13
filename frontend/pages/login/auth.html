@@ -1,0 +1,46 @@
+<section class="auth-card auth-loading" id="checking-view" aria-labelledby="checking-title" role="status">
+        <div class="brand-lockup" aria-hidden="true">
+          <span class="brand-mark"><span></span></span>
+          <span class="brand-name">My To-Do List</span>
+        </div>
+        <div class="loading-indicator" aria-hidden="true"></div>
+        <h1 id="checking-title">Checking your session</h1>
+        <p class="auth-intro">Just a moment while we securely reconnect you.</p>
+      </section>
+
+      <section class="auth-card auth-recovery" id="session-error-view" aria-labelledby="session-error-title" hidden>
+        <div class="brand-lockup" aria-hidden="true">
+          <span class="brand-mark"><span></span></span>
+          <span class="brand-name">My To-Do List</span>
+        </div>
+        <div class="status-icon status-icon-error" aria-hidden="true">!</div>
+        <h1 id="session-error-title">We couldn't check your session</h1>
+        <p class="auth-intro">Your sign-in status is unknown. Check your connection and try again.</p>
+        <button class="auth-submit" id="retry-session-button" type="button">Try again</button>
+      </section>
+
+      <section class="auth-card" id="auth-view" aria-labelledby="auth-title" hidden>
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span class="brand-name">My To-Do List</span>
+        </div>
+
+        <div class="auth-heading">
+          <p class="eyebrow">YOUR PERSONAL WORKSPACE</p>
+          <h1 id="auth-title">Welcome back</h1>
+          <p class="auth-intro" id="auth-intro">Sign in to pick up where you left off.</p>
+        </div>
+
+        <div class="auth-tabs" role="group" aria-label="Choose an account action">
+          <button class="auth-tab is-active" type="button" data-auth-mode="login" aria-pressed="true">Sign in</button>
+          <button class="auth-tab" type="button" data-auth-mode="register" aria-pressed="false">Create account</button>
+        </div>
+
+        <p class="auth-feedback" id="auth-feedback" role="status" aria-live="polite" hidden></p>
+
+        <!-- include: pages/login/form.html -->
+
+        <!-- include: pages/signup/form.html -->
+
+        <p class="auth-footnote">Your account is private to this local application.</p>
+      </section>

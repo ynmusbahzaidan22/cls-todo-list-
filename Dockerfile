@@ -11,7 +11,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 WORKDIR /app
 COPY --from=build --chown=nonroot:nonroot /out/todo-api /app/todo-api
-COPY --from=build --chown=nonroot:nonroot /src/index.html /src/script.js /src/style.css /app/
+COPY --from=build --chown=nonroot:nonroot /src/frontend /app/frontend
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/app/todo-api"]

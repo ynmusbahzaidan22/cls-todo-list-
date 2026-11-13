@@ -39,5 +39,15 @@ coverage.out
 /.credentials/
 /.idea/
 /.vscode/
+!/.vscode/
+/.vscode/*
+!/.vscode/settings.json
 .DS_Store
 Thumbs.db
+
+# Additional generated build and coverage outputs.
+/dist/
+/build/
+/coverage/
+*.out
+*.coverprofile

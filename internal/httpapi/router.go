@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,10 +40,20 @@ type RouterOptions struct {
 // NewRouter registers health, local authentication, and the explicitly allowed frontend files.
 func NewRouter(checker readinessChecker, logger *slog.Logger, frontendDir string, options ...RouterOptions) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", serveFrontendFile(frontendDir, "index.html"))
-	mux.HandleFunc("GET /index.html", serveFrontendFile(frontendDir, "index.html"))
-	mux.HandleFunc("GET /style.css", serveFrontendFile(frontendDir, "style.css"))
-	mux.HandleFunc("GET /script.js", serveFrontendFile(frontendDir, "script.js"))
+	frontendPage := serveFrontendPage(frontendDir, logger)
+	mux.HandleFunc("GET /{$}", frontendPage)
+	mux.HandleFunc("GET /index.html", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "./", http.StatusMovedPermanently)
+	})
+	for _, asset := range []string{
+		"styles/style.css", "styles/foundation.css", "styles/components.css", "styles/responsive.css",
+		"scripts/utils/presentation.js", "scripts/core/state.js", "scripts/auth/views.js", "scripts/templates/templates.js",
+		"scripts/services/http.js", "scripts/auth/sessions.js", "scripts/core/workspace.js", "scripts/components/admin.js",
+		"scripts/admin/dashboard.js", "scripts/preferences/time-zone.js", "scripts/tasks/workspace.js",
+	} {
+		assetPath := asset
+		mux.HandleFunc("GET /"+assetPath, serveFrontendFile(frontendDir, filepath.FromSlash(assetPath)))
+	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, response{Status: "ok"})
 	})
@@ -202,6 +213,78 @@ func serveFrontendFile(frontendDir, filename string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFile(w, r, filepath.Join(frontendDir, filename))
 	}
+}
+
+var frontendPartialAllowlist = map[string]struct{}{
+	"pages/login/auth.html":                        {},
+	"pages/login/form.html":                        {},
+	"pages/signup/form.html":                       {},
+	"pages/user-dashboard/dashboard.html":          {},
+	"pages/admin-dashboard/dashboard.html":         {},
+	"sections/navigation/header.html":              {},
+	"sections/tasks/task-list.html":                {},
+	"sections/tasks/workspace.html":                {},
+	"sections/tasks/recently-deleted-preview.html": {},
+	"sections/tasks/recently-deleted.html":         {},
+	"sections/tasks/completed.html":                {},
+	"sections/templates/templates.html":            {},
+	"sections/templates/dialogs.html":              {},
+	"sections/preferences/time-zone.html":          {},
+	"sections/activity/dialog.html":                {},
+}
+
+func serveFrontendPage(frontendDir string, logger *slog.Logger) http.HandlerFunc {
+	page, err := assembleFrontendPage(frontendDir)
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if err != nil {
+			if logger != nil {
+				logger.Error("frontend page assembly failed", "error", err)
+			}
+			http.Error(w, "The page could not be served.", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(page)
+	}
+}
+
+func assembleFrontendPage(frontendDir string) ([]byte, error) {
+	page, err := os.ReadFile(filepath.Join(frontendDir, "pages", "index.html"))
+	if err != nil {
+		return nil, err
+	}
+	const markerStart = "<!-- include: "
+	const markerEnd = " -->"
+	for range 32 {
+		start := strings.Index(string(page), markerStart)
+		if start < 0 {
+			return page, nil
+		}
+		endRelative := strings.Index(string(page[start:]), markerEnd)
+		if endRelative < 0 {
+			return nil, fmt.Errorf("frontend include marker is incomplete")
+		}
+		end := start + endRelative
+		relativePath := string(page[start+len(markerStart) : end])
+		if _, allowed := frontendPartialAllowlist[relativePath]; !allowed {
+			return nil, fmt.Errorf("frontend include path is not allowlisted")
+		}
+		partial, readErr := os.ReadFile(filepath.Join(frontendDir, filepath.FromSlash(relativePath)))
+		if readErr != nil {
+			return nil, fmt.Errorf("frontend partial could not be loaded: %w", readErr)
+		}
+		next := make([]byte, 0, len(page)-len(markerStart)-len(markerEnd)+len(partial))
+		next = append(next, page[:start]...)
+		next = append(next, partial...)
+		next = append(next, page[end+len(markerEnd):]...)
+		page = next
+	}
+	if strings.Contains(string(page), markerStart) {
+		return nil, fmt.Errorf("frontend page exceeds the allowed include depth")
+	}
+	return page, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value response) {

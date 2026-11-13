@@ -1,0 +1,47 @@
+<section class="admin-account-panel admin-dashboard" id="admin-account-panel" aria-labelledby="admin-account-title" hidden>
+          <div id="admin-dashboard-view" class="admin-dashboard-view">
+            <header class="admin-dashboard-heading">
+              <div><p class="eyebrow">ADMINISTRATION</p><h2 id="admin-account-title" tabindex="-1">Admin dashboard</h2><p>Manage account access and review tasks across the workspace.</p></div>
+            </header>
+            <div class="admin-dashboard-grid">
+              <section class="admin-section" id="admin-users-section" aria-label="Admin dashboard user preview">
+                <div class="admin-section-heading"><div><p class="eyebrow">PEOPLE</p><h3 id="admin-users-title">Users</h3><p>Recent users. Open the full view to search or manage accounts.</p></div></div>
+                <p id="admin-user-preview-count" class="admin-count" role="status" aria-live="polite"></p>
+                <div id="admin-user-preview-loading" class="admin-state" role="status" hidden>Loading users…</div>
+                <div id="admin-user-preview-error" class="admin-state admin-state-error" role="alert" hidden>Users are unavailable. Refresh and try again.</div>
+                <div id="admin-user-preview-empty" class="admin-state" role="status" hidden>No users to show yet.</div>
+                <div id="admin-user-preview-list" class="admin-preview-list" aria-busy="false"></div>
+                <button id="admin-view-all-users" class="secondary-button admin-view-all" type="button">View all users</button>
+              </section>
+              <section class="admin-section" id="admin-tasks-section" aria-label="Admin dashboard task preview">
+                <div class="admin-section-heading"><div><p class="eyebrow">WORKSPACE OVERVIEW</p><h3 id="admin-tasks-title">All users’ tasks</h3><p>Latest tasks across accounts. This view is read-only.</p></div><span class="admin-read-only-badge">Read only</span></div>
+                <p id="admin-task-preview-count" class="admin-count" role="status" aria-live="polite"></p>
+                <div id="admin-task-preview-loading" class="admin-state" role="status" hidden>Loading tasks…</div>
+                <div id="admin-task-preview-error" class="admin-state admin-state-error" role="alert" hidden>Tasks are unavailable. Refresh and try again.</div>
+                <div id="admin-task-preview-empty" class="admin-state" role="status" hidden>No tasks to show yet.</div>
+                <div id="admin-task-preview-list" class="admin-task-list" aria-busy="false"></div>
+                <button id="admin-view-all-tasks" class="secondary-button admin-view-all" type="button">View all tasks</button>
+              </section>
+            </div>
+          </div>
+          <section id="admin-users-view" class="admin-standalone-view" aria-label="All users management" hidden>
+            <button class="secondary-button admin-back-button" id="admin-users-back" type="button">← Back to admin dashboard</button>
+            <header class="admin-view-heading"><div><p class="eyebrow">ADMINISTRATION</p><h2 id="admin-users-view-title" tabindex="-1">Users</h2><p>Search by name and manage roles, status, and sessions.</p></div></header>
+            <div class="admin-user-search"><label for="admin-user-search-input">Search users by name</label><input id="admin-user-search-input" type="search" maxlength="100" autocomplete="off" placeholder="Enter a name"></div>
+            <p id="admin-account-count" class="admin-count" role="status" aria-live="polite"></p>
+            <p id="admin-account-feedback" class="admin-feedback" role="status" aria-live="polite"></p>
+            <div id="admin-account-loading" class="admin-state" role="status" hidden>Loading users…</div>
+            <div id="admin-account-error" class="admin-state admin-state-error" role="alert" hidden>Account administration is unavailable. Refresh and try again.</div>
+            <div id="admin-account-empty" class="admin-state" role="status" hidden>No users match that name.</div>
+            <div id="admin-account-list" class="admin-account-list" aria-busy="false"></div>
+          </section>
+          <section id="admin-tasks-view" class="admin-standalone-view" aria-label="All users tasks read-only view" hidden>
+            <button class="secondary-button admin-back-button" id="admin-tasks-back" type="button">← Back to admin dashboard</button>
+            <header class="admin-view-heading"><div><p class="eyebrow">READ-ONLY WORKSPACE OVERVIEW</p><h2 id="admin-tasks-view-title" tabindex="-1">All users’ tasks</h2><p>Tasks from all accounts. No task changes are available in this view.</p></div></header>
+            <p id="admin-task-count" class="admin-count" role="status" aria-live="polite"></p>
+            <div id="admin-task-loading" class="admin-state" role="status" hidden>Loading tasks…</div>
+            <div id="admin-task-error" class="admin-state admin-state-error" role="alert" hidden>Tasks are unavailable. Refresh and try again.</div>
+            <div id="admin-task-empty" class="admin-state" role="status" hidden>No tasks to show yet.</div>
+            <div id="admin-task-list" class="admin-task-list" aria-busy="false"></div>
+          </section>
+        </section>

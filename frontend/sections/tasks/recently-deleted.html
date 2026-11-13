@@ -1,0 +1,21 @@
+<section class="recently-deleted-view" id="recently-deleted-section" aria-labelledby="recently-deleted-title" hidden>
+          <button class="secondary-button deleted-view-back" id="deleted-back-to-tasks" type="button">← Back to tasks</button>
+          <div class="deleted-view-heading">
+            <div>
+              <p class="eyebrow">TASK RECOVERY</p>
+              <h2 id="recently-deleted-title" tabindex="-1">Recently deleted</h2>
+              <p class="deleted-view-intro">Tasks can be restored for 24 hours after deletion.</p>
+            </div>
+            <span class="deleted-view-count" id="deleted-view-count"></span>
+          </div>
+          <p class="deleted-view-feedback" id="deleted-view-feedback" role="status" aria-live="polite" hidden></p>
+          <p class="activity-loading" id="deleted-loading" role="status" aria-live="polite" hidden>Loading recently deleted tasks…</p>
+          <div class="activity-error" id="deleted-load-error" role="alert" hidden>
+            <p id="deleted-load-error-message">We couldn't load recently deleted tasks.</p>
+            <button class="secondary-button" id="retry-deleted-load-button" type="button">Try again</button>
+          </div>
+          <p class="activity-empty" id="deleted-empty" hidden>No tasks have been deleted in the last 24 hours.</p>
+          <ul class="task-list deleted-task-list" id="deleted-task-list"></ul>
+          <p class="pagination-feedback" id="deleted-pagination-feedback" role="status" aria-live="polite" hidden></p>
+          <button class="secondary-button" id="deleted-more-button" type="button" hidden>Load more deleted tasks</button>
+        </section>

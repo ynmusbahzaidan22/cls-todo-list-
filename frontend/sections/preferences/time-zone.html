@@ -1,0 +1,18 @@
+<details class="task-options timezone-preference" id="timezone-preference">
+          <summary class="task-options-summary">
+            <span class="task-options-summary-title">Time zone</span>
+            <span class="task-options-summary-hint" id="timezone-preference-summary">Using your device time zone</span>
+          </summary>
+          <form class="task-options-fields" id="timezone-preference-form" novalidate>
+            <div class="task-option-field">
+              <label class="input-label" for="timezone-override-input">Manual IANA time zone</label>
+              <input id="timezone-override-input" name="time_zone" type="text" maxlength="100" autocomplete="off" placeholder="America/New_York" aria-describedby="timezone-preference-help timezone-preference-feedback">
+              <p class="field-hint" id="timezone-preference-help">Leave this blank and choose “Use device time zone” to follow this browser. Dates remain calendar dates; the selected zone controls today and overdue calculations.</p>
+            </div>
+            <div class="form-actions">
+              <button class="secondary-button" id="save-timezone-override" type="submit">Save time zone</button>
+              <button class="secondary-button" id="use-device-timezone" type="button">Use device time zone</button>
+            </div>
+            <p class="activity-action-feedback" id="timezone-preference-feedback" role="status" aria-live="polite" hidden></p>
+          </form>
+        </details>

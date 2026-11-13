@@ -1,10 +1,28 @@
 # To-Do List application
 
-This repository contains an HTML, CSS, and Vanilla JavaScript frontend with local login and registration, plus a Go HTTP API backed by PostgreSQL. The Go server serves the allowlisted frontend files and API from one origin, without exposing other repository files. Authenticated task management is connected to the backend API, with PostgreSQL as the source of truth. See [OPERATIONS.md](OPERATIONS.md) for database roles, production configuration, reverse proxy assumptions, backups, and recovery.
+This repository contains an HTML, CSS, and Vanilla JavaScript frontend with local login and registration, plus a Go HTTP API backed by PostgreSQL. The Go server serves the allowlisted frontend files and API from one origin, without exposing other repository files. Authenticated task management is connected to the backend API, with PostgreSQL as the source of truth. See [operations guide](docs/OPERATIONS.md) for database roles, production configuration, reverse proxy assumptions, backups, and recovery.
+
+## Project map
+
+- [Project structure](docs/PROJECT_STRUCTURE.md) — directories, key files, and how the layers connect.
+- [Discussion guide](docs/DISCUSSION_GUIDE.md) — concise explanations of the main design choices and feature flows.
+- [API map](docs/API_MAP.md) — HTTP routes, authentication requirements, and owning handlers.
+- [Operations guide](docs/OPERATIONS.md) — migrations, roles, backups, and deployment safety.
+
+```text
+frontend/            HTML page/section partials, scripts, services, utilities, and CSS
+cmd/ + internal/     Go entry points, routes, handlers, domain services, repositories, and database
+migrations/ + ops/   Ordered Tern history and guarded database operations
+tests/               Frontend unit checks, Playwright E2E specs, and E2E safety helpers
+docs/                Current project guides and historical handoff/checklist
+Dockerfile, compose*.yaml, tern*.conf   Root-level build/runtime configuration
+```
+
+The Go server assembles allowlisted HTML partials and serves the frontend from the same origin. Go code stays in the standard `cmd/` and `internal/` layout; migrations, Tern configs, operations scripts, and Docker files stay at the root because their guarded workflows and build contexts use those locations.
 
 ## Production
 
-The live application is available at [https://cls-todo-list.onrender.com](https://cls-todo-list.onrender.com). It runs as a Docker web service on Render and uses Neon PostgreSQL. Production authentication uses same-origin, `HttpOnly`, `Secure`, `__Host-` cookies backed by server-side sessions; only session-token hashes are stored, with idle and absolute expiry. See [OPERATIONS.md](OPERATIONS.md) for the Render proxy assumptions and production configuration.
+The live application is available at [https://cls-todo-list.onrender.com](https://cls-todo-list.onrender.com). It runs as a Docker web service on Render and uses Neon PostgreSQL. Production authentication uses same-origin, `HttpOnly`, `Secure`, `__Host-` cookies backed by server-side sessions; only session-token hashes are stored, with idle and absolute expiry. See [operations guide](docs/OPERATIONS.md) for the Render proxy assumptions and production configuration.
 
 Production smoke evidence (2026-11-12): a read-only HTTPS request to `/health/ready` returned HTTP 200 with certificate verification successful. The owner reported a successful manual browser check covering registration, login and logout, task persistence, user isolation, individual and template-based task creation, USER access to Admin returning 403, and the Admin dashboard. The manual browser results are owner-reported, not an automated test result. The readiness response does not identify the deployed source commit.
 
@@ -40,7 +58,7 @@ Production smoke evidence (2026-11-12): a read-only HTTPS request to `/health/re
     .\ops\Invoke-DevelopmentMigrations.ps1 -Action status -ExpectedTargetVersion 15
    ```
 
-The development wrapper loads `.env` without displaying values and verifies that `DATABASE_URL`, `tern.conf`, the running PostgreSQL container, published loopback port, named volume, database identity, PostgreSQL version, and migration inventory all match the guarded development target. Its `status` action is read-only. The wrapper advances exactly one expected migration per invocation; `migrate` also requires an explicit authorization switch, expected current and target versions, and zero other database sessions. Before migrating, follow the verified backup and restore procedure in [OPERATIONS.md](OPERATIONS.md). Historical evidence records that on 2026-11-11 `todo_dev` advanced from 13/14 to 14/14 after creating and restoring a fresh custom-format backup and matching all pre-existing application-table row fingerprints and schema definitions. Current read-only Tern status is 14/15:
+The development wrapper loads `.env` without displaying values and verifies that `DATABASE_URL`, `tern.conf`, the running PostgreSQL container, published loopback port, named volume, database identity, PostgreSQL version, and migration inventory all match the guarded development target. Its `status` action is read-only. The wrapper advances exactly one expected migration per invocation; `migrate` also requires an explicit authorization switch, expected current and target versions, and zero other database sessions. Before migrating, follow the verified backup and restore procedure in [operations guide](docs/OPERATIONS.md). Historical evidence records that on 2026-11-11 `todo_dev` advanced from 13/14 to 14/14 after creating and restoring a fresh custom-format backup and matching all pre-existing application-table row fingerprints and schema definitions. Current read-only Tern status is 14/15:
 
    ```powershell
     .\ops\Invoke-DevelopmentMigrations.ps1 -Action status -ExpectedCurrentVersion 14 -ExpectedTargetVersion 15
@@ -56,7 +74,7 @@ Down sections are migration-specific, not a general data reset. Migrations 002, 
    docker-compose.exe -f compose.yaml exec postgres psql -v ON_ERROR_STOP=1 -U $env:POSTGRES_USER -d $env:POSTGRES_DB -f /tmp/provision_runtime_role.sql
    ```
 
-   See [OPERATIONS.md](OPERATIONS.md) for rotation, production grants, backup, and recovery procedures.
+   See [operations guide](docs/OPERATIONS.md) for rotation, production grants, backup, and recovery procedures.
 5. Load settings and start the HTTP server. The local bind address is loopback-only, and unsafe API requests require the configured Origin:
 
    ```powershell
@@ -127,7 +145,7 @@ Migration `014_admin_account_audit.sql` creates the audit and final-Admin guard 
 
 ### One-time initial Admin bootstrap
 
-`cmd/adminctl` is an operational CLI, not an HTTP endpoint. Its normal mode targets only the fixed local development endpoint `127.0.0.1:15432/todo_dev`; the isolated `todo_test` endpoint is accepted only in dedicated automated-test mode. A separate `--production` mode is pinned to the direct Frankfurt Neon `neondb` owner endpoint and requires verified TLS, PostgreSQL 18.6, Tern 15, an explicit database name, and an additional production-bootstrap authorization flag for writes. Production mode rejects inherited development/test URLs and PostgreSQL overrides, verifies the connected database owner, and never prints connection settings. See the production procedure in [OPERATIONS.md](OPERATIONS.md).
+`cmd/adminctl` is an operational CLI, not an HTTP endpoint. Its normal mode targets only the fixed local development endpoint `127.0.0.1:15432/todo_dev`; the isolated `todo_test` endpoint is accepted only in dedicated automated-test mode. A separate `--production` mode is pinned to the direct Frankfurt Neon `neondb` owner endpoint and requires verified TLS, PostgreSQL 18.6, Tern 15, an explicit database name, and an additional production-bootstrap authorization flag for writes. Production mode rejects inherited development/test URLs and PostgreSQL overrides, verifies the connected database owner, and never prints connection settings. See the production procedure in [operations guide](docs/OPERATIONS.md).
 
 After the actual owner account has been registered normally and is active, first verify through the guarded development migration status that `todo_dev` is at 15/15; migration 015 is currently pending there and must be applied only through the separately authorized guarded development migration procedure after its backup preconditions. Then load the development administrator settings into the process using the strict environment reader. Enter the exact normalized owner email and run the read-only status command. Proceed only if it reports zero active Admins, a zero guard count, and an eligible target. Bootstrap requires the matching `--confirm-database todo_dev` flag:
 
@@ -211,14 +229,14 @@ Templates are private to their owner. The authenticated `/api/task-templates` en
 
 ## Verification
 
-Run `node --test playwright-config-safety.test.js` to check Playwright configuration validation without starting the application or connecting to PostgreSQL.
+Run `npm run test:unit` for frontend presentation and E2E-configuration helper tests without starting the application or connecting to PostgreSQL.
 
 ```powershell
 gofmt -l (Get-ChildItem -Recurse -Filter *.go | ForEach-Object FullName)
 go test ./...
 go build ./...
 go vet ./...
-node --check script.js
+Get-ChildItem frontend\scripts -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
 ```
 
 `gofmt -l` is a read-only formatting check; no output means all listed Go files are formatted. Run `npm run test:html` for HTML validation. The Playwright project has focused scripts for Phases 8, 9, 10, 13, 14, 15, 16, and 17–18, plus `npm run test:e2e` for the complete configured browser suite.
@@ -249,7 +267,7 @@ foreach ($name in @('TEST_POSTGRES_DB', 'TEST_POSTGRES_USER', 'TEST_POSTGRES_PAS
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) { throw "Required test setting is missing: $name" }
 }
 if ($env:TEST_POSTGRES_DB -cne 'todo_test') { throw 'TEST_POSTGRES_DB must be todo_test.' }
-node --input-type=module -e "import { validateTestDatabaseConfiguration } from './e2e/test-database.js'; validateTestDatabaseConfiguration(); console.log('Test database URL configuration is valid.')"
+node --input-type=module -e "import { validateTestDatabaseConfiguration } from './tests/e2e/test-database.js'; validateTestDatabaseConfiguration(); console.log('Test database URL configuration is valid.')"
 docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml config --quiet
 docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml up -d postgres-test
 docker compose --env-file .env.test -p todo-list-test -f compose.test.yaml ps
@@ -300,6 +318,7 @@ From PowerShell, install the locked test dependencies and run the suite:
 
 ```powershell
 npm ci
+npm run test:frontend
 npm run test:html
 npm run test:phase8
 ```

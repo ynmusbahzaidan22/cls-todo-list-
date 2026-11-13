@@ -1,0 +1,34 @@
+<section class="recently-deleted-view completed-tasks-view" id="completed-tasks-section" aria-labelledby="completed-tasks-title" hidden>
+          <button class="secondary-button deleted-view-back" id="completed-back-to-tasks" type="button">← Back to tasks</button>
+          <div class="completed-page-heading">
+            <div class="completed-title-group">
+              <h2 id="completed-tasks-title" tabindex="-1">Completed</h2>
+            </div>
+            <div class="completed-overview" aria-live="polite" aria-atomic="true">
+              <div class="completed-total"><strong id="completed-total-count">—</strong><span>total completed</span></div>
+              <div class="completed-shown"><strong id="completed-shown-count">0</strong><span>shown</span></div>
+            </div>
+          </div>
+          <div class="completed-toolbar" role="group" aria-label="Completed task filters">
+            <div class="completed-filter-copy">
+              <span class="completed-filter-icon" aria-hidden="true"></span>
+              <div><label for="completed-period-filter">Completion period</label><p>Choose the history range to review.</p></div>
+            </div>
+            <select id="completed-period-filter">
+              <option value="all">All time</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="year">This year</option>
+            </select>
+          </div>
+          <p class="activity-loading" id="completed-loading" role="status" aria-live="polite" hidden>Loading completed tasks…</p>
+          <div class="activity-error" id="completed-load-error" role="alert" hidden>
+            <p id="completed-load-error-message">We couldn't load completed tasks.</p>
+            <button class="secondary-button" id="retry-completed-load-button" type="button">Try again</button>
+          </div>
+          <p class="activity-empty" id="completed-empty" hidden>No archived tasks yet. Completed tasks move here after 12 hours.</p>
+          <ul class="task-list deleted-task-list" id="completed-task-list" aria-label="Completed tasks"></ul>
+          <p class="pagination-feedback" id="completed-pagination-feedback" role="status" aria-live="polite" hidden></p>
+          <button class="secondary-button" id="completed-more-button" type="button" hidden>View more</button>
+        </section>
+      </section>

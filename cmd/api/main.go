@@ -1,3 +1,4 @@
+// Command api wires the HTTP application, runtime-role database pool, and background maintenance worker.
 package main
 
 import (
@@ -80,7 +81,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
-		Handler: httpapi.NewRouter(health.NewService(pool), logger, ".", httpapi.RouterOptions{
+		Handler: httpapi.NewRouter(health.NewService(pool), logger, "frontend", httpapi.RouterOptions{
 			Auth:                 authAPI,
 			Tasks:                taskAPI,
 			Admin:                adminAPI,

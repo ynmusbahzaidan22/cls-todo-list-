@@ -1,0 +1,31 @@
+<form class="auth-form" id="register-form" novalidate hidden>
+          <div class="field-group">
+            <label class="field-label" for="register-name">Name</label>
+            <input class="auth-input" id="register-name" name="name" type="text" autocomplete="name" placeholder="Your name" maxlength="100" required aria-describedby="register-name-hint register-name-error">
+            <p class="field-hint" id="register-name-hint">Use 1–100 characters.</p>
+            <p class="field-error" id="register-name-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="register-email">Email address</label>
+            <input class="auth-input" id="register-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required aria-describedby="register-email-error">
+            <p class="field-error" id="register-email-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="register-password">Password</label>
+            <div class="password-input-wrap">
+              <input class="auth-input" id="register-password" name="password" type="password" autocomplete="new-password" placeholder="Create a password" required aria-describedby="register-password-hint register-password-error">
+              <button class="password-visibility-toggle" type="button" aria-label="Show password" aria-controls="register-password" aria-pressed="false" data-password-visibility-toggle><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle><path class="password-toggle-slash" d="M4 20 20 4"></path></svg></button>
+            </div>
+            <p class="field-hint" id="register-password-hint">Use 12–128 characters.</p>
+            <p class="field-error" id="register-password-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="register-confirm-password">Confirm password</label>
+            <div class="password-input-wrap">
+              <input class="auth-input" id="register-confirm-password" name="confirm-password" type="password" autocomplete="new-password" placeholder="Enter your password again" required aria-describedby="register-confirm-password-error">
+              <button class="password-visibility-toggle" type="button" aria-label="Show password" aria-controls="register-confirm-password" aria-pressed="false" data-password-visibility-toggle><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle><path class="password-toggle-slash" d="M4 20 20 4"></path></svg></button>
+            </div>
+            <p class="field-error" id="register-confirm-password-error"></p>
+          </div>
+          <button class="auth-submit" id="register-submit" type="submit"><span id="register-submit-label">Create account</span><span aria-hidden="true">→</span></button>
+        </form>

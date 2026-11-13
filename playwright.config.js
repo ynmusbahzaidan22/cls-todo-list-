@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { generatePlaywrightClientIP, validateTestDatabaseConfiguration } from "./e2e/test-database.js";
+import { generatePlaywrightClientIP, validateTestDatabaseConfiguration } from "./tests/e2e/test-database.js";
 
 const { testDatabaseURL } = validateTestDatabaseConfiguration(process.env);
 
@@ -54,7 +54,7 @@ const launcherScript = `
     const [{ existsSync, mkdtempSync, rmSync, writeFileSync }, { tmpdir }, { join }] = await Promise.all([
       import("node:fs"), import("node:os"), import("node:path"),
     ]);
-    const { buildWebServerEnvironment } = await import(${JSON.stringify(new URL("./e2e/test-database.js", import.meta.url).href)});
+    const { buildWebServerEnvironment } = await import(${JSON.stringify(new URL("./tests/e2e/test-database.js", import.meta.url).href)});
     const childEnv = buildWebServerEnvironment({
       databaseURL: process.env.DATABASE_URL,
       httpAddr: process.env.HTTP_ADDR,
@@ -139,8 +139,8 @@ const webServerCommand = `${nodeExecutable} -e "eval(Buffer.from('${encodedLaunc
 const explicitBrowser = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
 
 export default defineConfig({
-  testDir: "./e2e",
-  globalSetup: "./e2e/global-setup.js",
+  testDir: "./tests/e2e",
+  globalSetup: "./tests/e2e/global-setup.js",
   fullyParallel: false,
   workers: 1,
   retries: 0,

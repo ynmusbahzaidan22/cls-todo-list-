@@ -1,0 +1,47 @@
+<dialog class="activity-dialog template-dialog" id="template-editor-dialog" aria-labelledby="template-editor-title">
+          <form id="template-editor-form" novalidate>
+            <div class="activity-dialog-header"><div><p class="eyebrow">REUSABLE TASKS</p><h2 id="template-editor-title">Create template</h2></div><button class="dialog-close-button" id="template-editor-close" type="button" aria-label="Close template editor">×</button></div>
+            <label class="input-label" for="template-name">Template name</label>
+            <input id="template-name" type="text" maxlength="100" required>
+            <label class="input-label" for="template-description">Description <span>(optional)</span></label>
+            <textarea id="template-description" rows="2" maxlength="10000"></textarea>
+          <div class="list-heading"><h3>Items</h3><button class="secondary-button" id="add-template-item" type="button">Add item</button></div>
+          <section class="template-task-picker" id="template-task-picker" aria-labelledby="template-task-picker-title" hidden>
+            <div class="template-task-picker-heading"><h4 id="template-task-picker-title">Choose from your tasks</h4><button class="secondary-button" id="template-task-picker-close" type="button">Close</button></div>
+            <label class="input-label" for="template-task-picker-search">Search tasks</label>
+            <input id="template-task-picker-search" type="search" maxlength="200" placeholder="Search your active tasks" autocomplete="off">
+            <p class="field-hint">This copies the title, description, and priority. New tasks from a template start as To do; set due timing below.</p>
+            <p class="template-picker-loading" id="template-picker-loading" role="status" aria-live="polite" hidden>Loading your tasks…</p>
+            <p class="template-picker-error" id="template-picker-error" role="alert" hidden></p>
+            <p class="template-picker-empty" id="template-picker-empty" hidden>No matching active tasks. You can add a task manually.</p>
+            <ul class="template-picker-list" id="template-picker-list" aria-label="Tasks you can add to the template"></ul>
+            <button class="secondary-button template-picker-more" id="template-picker-more" type="button" hidden>Load more tasks</button>
+            <button class="secondary-button" id="template-add-manual" type="button">Add a task manually</button>
+          </section>
+            <p class="template-editor-error" id="template-editor-error" role="alert" hidden></p>
+          <p class="template-items-empty" id="template-items-empty">No items yet. Choose an existing task or add one manually.</p>
+            <div id="template-item-fields"></div>
+            <div class="template-dialog-actions"><button class="secondary-button" id="template-editor-cancel" type="button">Cancel</button><button class="primary-button" id="template-save-button" type="submit">Save template</button></div>
+          </form>
+        </dialog>
+
+        <dialog class="activity-dialog template-dialog" id="template-detail-dialog" aria-labelledby="template-detail-title">
+          <div class="activity-dialog-header"><div><p class="eyebrow">TASK TEMPLATE</p><h2 id="template-detail-title">Template details</h2><p id="template-detail-description"></p></div><button class="dialog-close-button" id="template-detail-close" type="button" aria-label="Close template details">×</button></div>
+          <ul class="template-detail-items" id="template-detail-items"></ul>
+          <p class="template-editor-error" id="template-detail-feedback" role="status" aria-live="polite" hidden></p>
+          <div class="template-dialog-actions"><button class="delete-button" id="template-detail-delete" type="button">Delete template</button><button class="secondary-button" id="template-detail-edit" type="button">Edit</button><button class="secondary-button" id="template-detail-new-set" type="button">Create new set</button><button class="primary-button" id="template-detail-apply" type="button">Use template</button></div>
+        </dialog>
+
+        <dialog class="bulk-confirm-dialog" id="template-apply-dialog" aria-labelledby="template-apply-title" aria-describedby="template-apply-description">
+          <h2 id="template-apply-title">Create tasks from template?</h2><p id="template-apply-description"></p>
+          <div class="bulk-confirm-actions"><button class="secondary-button" id="template-apply-cancel" type="button">Cancel</button><button class="primary-button" id="template-apply-confirm" type="button">Create tasks</button></div>
+        </dialog>
+
+        <dialog class="bulk-confirm-dialog" id="bulk-confirm-dialog" aria-labelledby="bulk-confirm-title" aria-describedby="bulk-confirm-description">
+          <h2 id="bulk-confirm-title">Delete selected tasks?</h2>
+          <p id="bulk-confirm-description"></p>
+          <div class="bulk-confirm-actions">
+            <button class="secondary-button" id="bulk-cancel-delete" type="button">Cancel</button>
+            <button class="delete-button" id="bulk-confirm-delete" type="button">Delete tasks</button>
+          </div>
+        </dialog>

@@ -1,0 +1,141 @@
+<form class="task-form" id="task-form" novalidate>
+          <label class="input-label" for="task-input">New task</label>
+          <div class="form-row">
+            <input id="task-input" name="task" type="text" placeholder="Add a task" autocomplete="off" maxlength="400" aria-describedby="input-feedback" required>
+            <button class="add-button" type="submit">Add Task</button>
+          </div>
+          <details class="task-options" id="task-options">
+            <summary class="task-options-summary">
+              <span class="task-options-summary-title">Add details</span>
+              <span class="task-options-summary-hint">Description, priority, due date</span>
+            </summary>
+            <div class="task-options-fields">
+              <div class="task-option-field">
+                <label class="input-label description-label" for="task-description-input">Description <span>(optional)</span></label>
+                <textarea class="task-description-input" id="task-description-input" name="description" rows="2" maxlength="20000" aria-describedby="input-feedback"></textarea>
+              </div>
+              <div class="task-option-metadata">
+                <div class="task-option-field">
+                  <label class="input-label" for="task-priority-input">Priority</label>
+                  <select id="task-priority-input" name="priority" class="task-priority-select">
+                    <option value="LOW">Low</option><option value="MEDIUM" selected>Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option>
+                  </select>
+                </div>
+                <div class="task-option-field">
+                  <label class="input-label" for="task-due-date-input">Due date <span>(optional)</span></label>
+                  <div class="form-row task-due-date-row">
+                    <input id="task-due-date-input" name="due_date" type="date" aria-describedby="due-date-help">
+                    <button class="secondary-button" id="clear-new-due-date" type="button">Clear date</button>
+                  </div>
+                  <p class="field-hint" id="due-date-help">A calendar date. Your selected time zone controls today and overdue calculations.</p>
+                </div>
+              </div>
+            </div>
+          </details>
+          <p class="form-feedback" id="input-feedback" aria-live="polite" aria-atomic="true"></p>
+        </form>
+
+        <p class="task-feedback" id="task-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+
+        <div class="list-heading">
+          <h2>Tasks</h2>
+          <p class="task-summary" id="task-summary" role="status" aria-live="polite" aria-atomic="true" hidden>
+            <span class="task-summary-metric"><strong id="task-shown-count">0</strong><span>shown</span></span>
+            <span class="task-summary-metric task-summary-completed"><strong id="task-completed-count">0</strong><span>completed</span></span>
+          </p>
+        </div>
+
+        <section class="task-section" id="task-section" aria-label="Your tasks">
+          <div class="task-filters" role="search" aria-label="Search and filter active tasks">
+            <div class="task-filter-toolbar">
+              <div class="task-searchbox">
+                <label class="sr-only" for="task-search">Search tasks</label>
+                <span class="task-search-icon" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" focusable="false"><circle cx="8.8" cy="8.8" r="5.6"></circle><path d="m13 13 4 4"></path></svg>
+                </span>
+                <input id="task-search" type="search" autocomplete="off" maxlength="400" aria-describedby="task-filter-help" placeholder="Search tasks by title or description">
+                <p class="sr-only" id="task-filter-help">Search active task titles and descriptions.</p>
+              </div>
+              <button class="task-filter-toggle" id="task-filter-toggle" type="button" aria-expanded="false" aria-controls="task-filter-panel">
+                  <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3 4h14l-5.5 6.2v5l-3 1.5v-6.5L3 4Z"></path></svg>
+                  <span>Filters</span>
+                  <span class="task-filter-count" id="task-filter-count" hidden></span>
+                  <svg class="task-filter-chevron" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m5 7.5 5 5 5-5"></path></svg>
+              </button>
+            </div>
+            <div class="task-filter-panel" id="task-filter-panel" hidden>
+              <div class="task-filter-panel-heading">
+                <div><h3>Refine your tasks</h3><p>Combine filters to narrow the list.</p></div>
+                <button class="task-filter-clear" id="clear-task-filters" type="button" hidden>Clear filters</button>
+              </div>
+              <div class="task-filter-field">
+                <label class="input-label" for="task-status-filter">Status</label>
+                <select id="task-status-filter" class="task-status-select">
+                  <option value="">All statuses</option><option value="TODO">To do</option>
+                  <option value="IN_PROGRESS">In progress</option><option value="DONE">Done</option>
+                </select>
+              </div>
+              <div class="task-filter-field">
+                <label class="input-label" for="task-priority-filter">Priority</label>
+                <select id="task-priority-filter" class="task-priority-select">
+                  <option value="">All priorities</option><option value="LOW">Low</option>
+                  <option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option>
+                </select>
+              </div>
+              <div class="task-filter-field">
+                <label class="input-label" for="task-due-filter">Due date</label>
+                <select id="task-due-filter">
+                  <option value="">Any due date</option><option value="overdue">Overdue</option>
+                  <option value="today">Due today</option><option value="upcoming">Upcoming</option><option value="none">No due date</option>
+                </select>
+                </div>
+            </div>
+            <div class="active-task-filters" id="active-task-filters" role="group" aria-label="Active filters" hidden></div>
+          </div>
+          <div class="bulk-controls" id="bulk-controls" role="group" aria-label="Bulk task actions" hidden>
+            <div class="bulk-selection">
+              <label class="bulk-select-all"><input id="select-all-visible" type="checkbox"> Select all visible</label>
+              <span class="bulk-selection-count" id="bulk-selection-count" role="status" aria-live="polite">0 selected</span>
+            </div>
+            <div class="bulk-actions" id="bulk-actions" role="group" aria-label="Actions for selected tasks" hidden>
+              <label class="bulk-status-label visually-hidden" for="bulk-status">Status for selected tasks</label>
+              <select id="bulk-status" class="task-status-select">
+                <option value="TODO">To do</option>
+                <option value="IN_PROGRESS">In progress</option>
+                <option value="DONE">Done</option>
+              </select>
+              <button class="primary-button" id="bulk-apply-status" type="button">Apply status</button>
+              <button class="delete-button bulk-delete-button" id="bulk-delete" type="button">Delete selected</button>
+            </div>
+          </div>
+          <div class="task-loading" id="task-loading" role="status" aria-live="polite" hidden>
+            <span class="loading-indicator" aria-hidden="true"></span>
+            <span>Loading your tasks…</span>
+          </div>
+          <div class="task-load-error" id="task-load-error" role="alert" hidden>
+            <p id="task-load-error-message">We couldn't load your tasks.</p>
+            <button class="secondary-button" id="retry-task-load-button" type="button">Try again</button>
+          </div>
+          <ul class="task-list" id="task-list" aria-describedby="task-summary">
+            <li class="recently-completed-group" id="recently-completed-group" hidden>
+              <details class="recently-completed-details" id="recently-completed-details">
+                <summary>
+                  <span class="recently-completed-title">Recently completed</span>
+                  <span class="recently-completed-count" id="recently-completed-count">0</span>
+                  <span class="recently-completed-hint">Completed within the 12-hour review window</span>
+                  <span class="recently-completed-chevron" aria-hidden="true"></span>
+                </summary>
+                <ul class="task-list recently-completed-list" id="recently-completed-task-list" aria-label="Recently completed tasks"></ul>
+              </details>
+            </li>
+          </ul>
+          <div class="empty-state" id="empty-state" hidden>
+            <p id="empty-state-default">No tasks yet. Add one to get started.</p>
+            <p id="empty-state-search" hidden>No active tasks match your search.</p>
+            <p id="empty-state-status" hidden>No active tasks have this status.</p>
+            <p id="empty-state-search-status" hidden>No active tasks match your search and status.</p>
+            <p id="empty-state-filters" hidden>No active tasks match the selected filters.</p>
+          </div>
+          <p class="pagination-feedback" id="pagination-feedback" role="status" aria-live="polite" hidden></p>
+          <button class="secondary-button load-more-button" id="load-more-button" type="button" hidden>Load more tasks</button>
+        </section>

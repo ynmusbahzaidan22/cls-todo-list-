@@ -1,0 +1,16 @@
+<form class="auth-form" id="login-form" novalidate>
+          <div class="field-group">
+            <label class="field-label" for="login-email">Email address</label>
+            <input class="auth-input" id="login-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required aria-describedby="login-email-error">
+            <p class="field-error" id="login-email-error"></p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="login-password">Password</label>
+            <div class="password-input-wrap">
+              <input class="auth-input" id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required aria-describedby="login-password-error">
+              <button class="password-visibility-toggle" type="button" aria-label="Show password" aria-controls="login-password" aria-pressed="false" data-password-visibility-toggle><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle><path class="password-toggle-slash" d="M4 20 20 4"></path></svg></button>
+            </div>
+            <p class="field-error" id="login-password-error"></p>
+          </div>
+          <button class="auth-submit" id="login-submit" type="submit"><span id="login-submit-label">Sign in</span><span aria-hidden="true">→</span></button>
+        </form>

@@ -1,0 +1,53 @@
+{
+  "files.exclude": {
+    "**/.env": true,
+    "**/.env.*": true,
+    "**/.env.example": false,
+    "**/node_modules": true,
+    "**/go.sum": false,
+    "**/package-lock.json": false,
+    "**/playwright-report": true,
+    "**/test-results": true,
+    "**/blob-report": true,
+    "**/coverage": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.cache": true,
+    "**/tmp": true,
+    "**/*.log": true,
+    "**/*.tmp": true,
+    "**/*.out": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true
+  },
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "compose.yaml": "compose.test.yaml, compose.production.yaml",
+    "tern.conf": "tern.test.conf, tern.production.conf",
+    "go.mod": "go.sum",
+    "package.json": "package-lock.json, playwright.config.js",
+    "Dockerfile": ".dockerignore"
+  },
+  "search.exclude": {
+    "**/.env": true,
+    "**/.env.*": true,
+    "**/.env.example": false,
+    "**/node_modules": true,
+    "**/go.sum": true,
+    "**/package-lock.json": true,
+    "**/playwright-report": true,
+    "**/test-results": true,
+    "**/blob-report": true,
+    "**/coverage": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.cache": true,
+    "**/tmp": true,
+    "**/*.log": true,
+    "**/*.tmp": true,
+    "**/*.out": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true
+  }
+}
